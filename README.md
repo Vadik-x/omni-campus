@@ -1,156 +1,240 @@
 # Omni-Campus
 
-Omni-Campus is a real-time campus student tracking dashboard that combines camera frames, AI re-identification, and fallback signal fusion to keep a live operational view of student movement.
+Prototype status: full ready.
 
-## Architecture Overview
+Omni-Campus is a real-time campus monitoring dashboard for student presence and movement. It includes live camera feeds, face-based recognition, activity feed, movement trail, and an interactive campus map with draggable camera markers.
 
-### System Layers
+## What Is Included
 
-1. Input Layer:
-   - Camera stream (RTSP or uploaded frame)
-   - Simulated WiFi/RF fallback
-   - Student profile database
-2. Processing Layer:
-   - Gemini frame analysis and student re-identification
-   - Signal fusion loop running every 5 seconds
-3. Fusion + Backend Layer:
-   - Node.js + Express API
-   - Socket.io real-time event broadcasting
-   - MongoDB persistence with history trail
-4. Output Layer:
-   - React dashboard with map, list, feed, and detailed student panel
+- Real-time dashboard with student list, activity panel, and map view
+- Face registration modal with multi-photo descriptor capture
+- Duplicate-safe registration update flow by Student ID and name similarity
+- Camera management (webcam, IP camera, DroidCam, custom URL)
+- Socket-based live updates for detections and student lifecycle changes
+- Persistent map center and camera positions in local storage
+- Backend file-store persistence (JSON data file)
+- Bulk cleanup support (`Clear All Data` in registry + backend `DELETE /api/students`)
 
-### Tech Stack
+## Tech Stack
 
-- Frontend: React 18, Vite, Leaflet, axios, socket.io-client
-- Backend: Node.js, Express, Socket.io, Mongoose
-- AI: Gemini 2.0 Flash via @google/generative-ai
-- Database: MongoDB Atlas/local MongoDB
-- Deploy: Vercel (frontend), Railway (backend), GitHub Actions CI/CD
+- Frontend: React, Vite, React Router, React Leaflet, Socket.IO Client, Axios
+- Backend: Node.js, Express, Socket.IO, dotenv
+- Recognition: `@vladmandic/face-api` on frontend
+- Storage: backend JSON file (`backend/data/students.json`) + browser localStorage
 
 ## Repository Structure
 
-- frontend: React dashboard
-- backend: Express API, camera, Gemini, and fusion services
-- .github/workflows/deploy.yml: CI/CD pipeline
-- .env.example: required environment variables
+```text
+.
+|- frontend/                  # React app (dashboard, map, face registration UI)
+|- backend/                   # Express + Socket.IO API and services
+|  |- routes/                 # students, tracking, proxy camera routes
+|  |- services/               # camera, fusion, student store
+|  |- data/students.json      # persisted student records (created at runtime)
+|- .github/workflows/         # CI/CD workflow
+|- .env.example               # environment variable template
+```
 
-## Environment Variables
+## Fork And Setup (GitHub)
 
-Use .env.example as reference.
+### 1. Fork The Repository
 
-Required backend variables:
+1. Open this repository on GitHub.
+2. Click **Fork**.
+3. Fork it to your own GitHub account.
 
-- MONGO_URI
-- GEMINI_API_KEY
-- CAMERA_URL
-- CAMERA_ZONE
-- PORT
-- FRONTEND_URL
+### 2. Clone Your Fork
 
-Required frontend variable:
+```bash
+git clone https://github.com/<your-username>/<your-fork>.git
+cd <your-fork>
+```
 
-- VITE_BACKEND_URL
+Optional (recommended): keep upstream remote for syncing with original project.
 
-## Local Setup
+```bash
+git remote add upstream https://github.com/<original-owner>/<original-repo>.git
+git remote -v
+```
 
-### 1. Backend
+### 3. Install Prerequisites
 
-1. Open terminal in backend
-2. Install dependencies:
-   - npm install
-3. Configure backend/.env (copy from .env.example)
-4. Run backend:
-   - npm start
+- Node.js 20+
+- npm 10+
+- Modern browser (Chrome/Edge recommended)
 
-### 2. Frontend
+Check versions:
 
-1. Open terminal in frontend
-2. Install dependencies:
-   - npm install
-3. Configure frontend/.env with VITE_BACKEND_URL
-4. Run frontend:
-   - npm run dev
+```bash
+node -v
+npm -v
+```
 
-Frontend default URL: http://localhost:5173
-Backend default URL: http://localhost:5000
+## Environment Setup
 
-If MongoDB is down, backend now starts in temporary mock mode automatically and serves seeded in-memory students so the dashboard remains usable.
+The root `.env.example` shows all variables you need.
 
-## Camera Setup (IP Webcam Android App)
+### Backend (`backend/.env`)
 
-1. Install IP Webcam on Android (Play Store)
-2. Connect phone and development machine to the same WiFi network
-3. Open IP Webcam and start server
-4. Copy the stream URL shown by the app (example: rtsp://PHONE_IP:554/h264_ulaw.sdp)
-5. Set CAMERA_URL in backend/.env to that RTSP URL
-6. Set CAMERA_ZONE to the physical camera area (example: Library - Block B)
-7. Restart backend
+Create `backend/.env` with:
 
-If camera connection fails, backend automatically switches to mock mode.
+```env
+PORT=5000
+FRONTEND_URL=http://localhost:5173
+CAMERA_URL=0
+CAMERA_ZONE=Library - Block B
+```
 
-## Demo Mode
+Notes:
 
-Use simulated tracking when camera or Gemini is unavailable.
+- `CAMERA_URL=0` keeps camera in local/mock-friendly mode.
+- Set `CAMERA_URL` to an IP camera stream URL when using real camera input.
 
-### Demo options
+### Frontend (`frontend/.env`)
 
-1. Use simulation endpoint:
-   - POST /api/tracking/simulate
-   - body: { "studentId": "OC1001", "buildingName": "Library - Block B" }
-2. Use detection endpoint manually:
-   - POST /api/tracking/detection
-3. Observe live updates on dashboard:
-   - student:update
-   - detection:event
+Create `frontend/.env` with:
 
-## API Highlights
+```env
+VITE_BACKEND_URL=http://localhost:5000
+```
 
-- GET /api/students
-- GET /api/students/:id
-- POST /api/students
-- PATCH /api/students/:id/location
-- POST /api/tracking/detection
-- POST /api/tracking/simulate
-- POST /api/camera/frame
-- GET /api/camera/status
+## Local Development
 
-## Deployment
+Open two terminals from project root.
 
-### Frontend to Vercel
+### Terminal 1: Backend
 
-- Config file: frontend/vercel.json
-- Uses VITE_BACKEND_URL as environment variable
-- SPA routing handled with rewrite to index.html
+```bash
+cd backend
+npm install
+npm start
+```
 
-### Backend to Railway
+Backend default URL: `http://localhost:5000`
 
-- Config files:
-  - backend/Procfile
-  - backend/railway.toml
-- App starts with npm start and reads process.env.PORT
+### Terminal 2: Frontend
 
-### CI/CD via GitHub Actions
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-Workflow: .github/workflows/deploy.yml
+Frontend default URL: `http://localhost:5173`
 
-On push to main:
+## Build Validation
 
-1. Install and test frontend
-2. Install and test backend
-3. Deploy frontend via Vercel CLI
-4. Deploy backend via Railway CLI
+Frontend production build:
 
-Required GitHub Secrets:
+```bash
+cd frontend
+npm run build
+```
 
-- VERCEL_TOKEN
-- VERCEL_ORG_ID
-- VERCEL_PROJECT_ID
-- RAILWAY_TOKEN
-- RAILWAY_SERVICE
+Backend syntax check:
 
-## Operations Notes
+```bash
+cd backend
+node --check server.js
+```
 
-- Fusion loop runs every 5 seconds
-- Students not seen for over 10 minutes are marked offline
-- Blind spot fallback marks recent students as alert via WIFI-RF simulation
+## Core API Endpoints
+
+### Health
+
+- `GET /health`
+
+### Students
+
+- `GET /api/students`
+- `GET /api/students/export`
+- `GET /api/students/:id`
+- `POST /api/students`
+- `PATCH /api/students/:id`
+- `PATCH /api/students/:id/location`
+- `DELETE /api/students/:id`
+- `DELETE /api/students` (clear all)
+
+### Tracking
+
+- `POST /api/tracking/detection`
+- `POST /api/tracking/simulate`
+
+### Camera Proxy
+
+- `GET /api/proxy/stream?url=...`
+- `GET /api/proxy/snapshot?url=...`
+- `GET /api/proxy/test?url=...`
+
+## Socket Events
+
+### Client -> Server
+
+- `camera:register`
+- `camera:disconnect`
+- `student:register`
+- `face:detected`
+
+### Server -> Client
+
+- `student:update`
+- `student:removed`
+- `student:delete` (legacy compatibility)
+- `students:cleared`
+- `detection:event`
+- `cameras:list`
+
+## Typical Usage Flow
+
+1. Open dashboard and add/connect camera(s).
+2. Click **Register Face** and register student photos/descriptors.
+3. If Student ID already exists, confirm update to merge descriptors.
+4. Use map controls to set campus center and drag camera markers.
+5. Monitor detections in activity feed and student detail panel.
+6. Use **Clear All Data** in Face Registry danger zone when you need a full reset.
+
+## Deployment (From Your Fork)
+
+CI/CD workflow is in `.github/workflows/deploy.yml` and runs on push to `main`.
+
+### Required GitHub Secrets
+
+- `VERCEL_TOKEN`
+- `VERCEL_ORG_ID`
+- `VERCEL_PROJECT_ID`
+- `RAILWAY_TOKEN`
+- `RAILWAY_SERVICE`
+
+### Frontend Deployment
+
+- Platform: Vercel
+- Reads `VITE_BACKEND_URL` from Vercel environment variables
+
+### Backend Deployment
+
+- Platform: Railway
+- Reads runtime variables (`PORT`, `FRONTEND_URL`, `CAMERA_URL`, `CAMERA_ZONE`)
+
+## Troubleshooting
+
+- Port already in use:
+  - Backend auto-falls forward to next port.
+  - Update frontend `VITE_BACKEND_URL` if backend port changes.
+- Camera not reachable:
+  - Check device and machine are on same network.
+  - Use `GET /api/proxy/test?url=...` to validate reachability.
+- No detections visible:
+  - Ensure students are registered with enough face descriptors.
+  - Confirm camera feed is active and socket status is live.
+- Map scroll feels locked:
+  - Click inside map first to enable wheel zoom.
+
+## Security And Hygiene
+
+- Do not commit `.env` files.
+- Keep API keys and deployment secrets only in local env or GitHub secrets.
+- Remove test students using clear-all flow before demo or release.
+
+---
+
+If you fork this project and follow this guide, you should be able to run the full prototype locally and deploy it from your own GitHub repository.

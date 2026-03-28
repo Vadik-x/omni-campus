@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import axios from "axios";
 import { faceEngine } from "../lib/faceEngine";
 
 const STORAGE_KEY = "omni:registry:v2";
 const LEGACY_STORAGE_KEY = "omni:faces:v1";
+const ENGINE_STORAGE_KEY = "omni_face_registry";
 const MAX_FACE_PHOTOS = 5;
+const MAX_MERGED_PHOTOS = 30;
+const MAX_MERGED_DESCRIPTORS = 30;
+const API_BASE =
+  import.meta.env.VITE_BACKEND_URL ||
+  import.meta.env.VITE_API_BASE ||
+  "http://localhost:5000";
 
 const PROGRAM_OPTIONS = [
   "B.Tech CSE",
@@ -29,7 +37,7 @@ const EMPTY_FORM = {
 };
 
 const MIN_SUCCESSFUL_DETECTIONS = 2;
-const AUTO_CAPTURE_COUNTDOWN_SECONDS = 2;
+const AUTO_CAPTURE_COUNTDOWN_SECONDS = 3;
 const AUTO_CAPTURE_STEPS = [
   "Look straight ahead",
   "Turn slightly left",
@@ -227,6 +235,121 @@ function statusFromStudentsMap(statusMap, studentId) {
   return statusMap.get(studentId) === "online" ? "online" : "offline";
 }
 
+function removeFromLocalRegistry(studentId) {
+  const key = String(studentId || "").trim();
+  if (!key) {
+    return;
+  }
+
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const next = parsed.filter((entry) => String(entry?.studentId || "") !== key);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      }
+    }
+  } catch (error) {
+    // Ignore storage errors so deletion can proceed.
+  }
+
+  try {
+    const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacyRaw) {
+      const parsed = JSON.parse(legacyRaw);
+      if (Array.isArray(parsed)) {
+        const next = parsed.filter((entry) => String(entry?.personId || "") !== key);
+        localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(next));
+      }
+    }
+  } catch (error) {
+    // Ignore storage errors so deletion can proceed.
+  }
+
+  try {
+    const engineRaw = localStorage.getItem(ENGINE_STORAGE_KEY);
+    if (engineRaw) {
+      const parsed = JSON.parse(engineRaw);
+      if (Array.isArray(parsed)) {
+        const next = parsed.filter((entry) => String(entry?.personId || "") !== key);
+        localStorage.setItem(ENGINE_STORAGE_KEY, JSON.stringify(next));
+      }
+    }
+  } catch (error) {
+    // Ignore storage errors so deletion can proceed.
+  }
+}
+
+function clearAllLocalRegistries() {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    localStorage.removeItem(ENGINE_STORAGE_KEY);
+  } catch (error) {
+    // Ignore storage errors so clear-all flow can continue.
+  }
+}
+
+function descriptorFingerprint(descriptor) {
+  const normalized = normalizeDescriptorArray(descriptor);
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized.map((value) => value.toFixed(6)).join("|");
+}
+
+function mergeDescriptors(existing = [], incoming = []) {
+  const merged = [];
+  const seen = new Set();
+
+  const pushDescriptor = (descriptor) => {
+    const normalized = normalizeDescriptorArray(descriptor);
+    if (!normalized) {
+      return;
+    }
+
+    const key = descriptorFingerprint(normalized);
+    if (!key || seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    merged.push(normalized);
+  };
+
+  existing.forEach(pushDescriptor);
+  incoming.forEach(pushDescriptor);
+
+  return merged.slice(-MAX_MERGED_DESCRIPTORS);
+}
+
+function mergePhotos(existing = [], incoming = []) {
+  const merged = [];
+  const seen = new Set();
+
+  const pushPhoto = (photo, index) => {
+    const normalized = normalizePhoto(photo, index);
+    if (!normalized) {
+      return;
+    }
+
+    const key = normalized.dataUrl;
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    merged.push(normalized);
+  };
+
+  existing.forEach((photo, index) => pushPhoto(photo, index));
+  incoming.forEach((photo, index) => pushPhoto(photo, index));
+
+  return merged.slice(-MAX_MERGED_PHOTOS);
+}
+
 export default function FaceRegister({
   open,
   onClose,
@@ -323,6 +446,14 @@ export default function FaceRegister({
       cancelled = true;
     };
   }, [syncingEngineFromRegistry]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    setRegistry(readStoredRegistry());
+  }, [open]);
 
   const stopCountdown = useCallback(() => {
     if (countdownTimerRef.current) {
@@ -457,21 +588,13 @@ export default function FaceRegister({
       return false;
     }
 
-    const duplicate = registry.some(
-      (entry) => entry.studentId === studentId && entry.studentId !== editingStudentId
-    );
-    if (duplicate) {
-      setError("Student ID already exists. Use a unique Student ID.");
-      return false;
-    }
-
     if (hydrating) {
       setError("Face model is loading. Please wait a moment.");
       return false;
     }
 
     return true;
-  }, [editingStudentId, form.fullName, form.studentId, hydrating, registry]);
+  }, [form.fullName, form.studentId, hydrating]);
 
   const appendCapturedPhoto = useCallback(
     (dataUrl, descriptor, explicitCount = null) => {
@@ -768,12 +891,18 @@ export default function FaceRegister({
       return;
     }
 
-    const duplicate = registry.some(
+    const existingByStudentId = registry.find(
       (entry) => entry.studentId === studentId && entry.studentId !== editingStudentId
     );
-    if (duplicate) {
-      setError("Student ID must be unique.");
-      return;
+    if (existingByStudentId) {
+      const confirmedUpdate = window.confirm(
+        `Update existing registration for ${existingByStudentId.fullName}?`
+      );
+
+      if (!confirmedUpdate) {
+        setError("Registration cancelled.");
+        return;
+      }
     }
 
     if (liveCaptureStarted && !autoCaptureCompleted) {
@@ -781,7 +910,12 @@ export default function FaceRegister({
       return;
     }
 
-    if (draftDescriptors.length < MIN_SUCCESSFUL_DETECTIONS) {
+    const baseRecord =
+      existingByStudentId || registry.find((entry) => entry.studentId === editingStudentId) || null;
+    const mergedDescriptors = mergeDescriptors(baseRecord?.descriptors || [], draftDescriptors);
+    const mergedPhotos = mergePhotos(baseRecord?.photos || [], draftPhotos);
+
+    if (mergedDescriptors.length < MIN_SUCCESSFUL_DETECTIONS) {
       setError("At least 2 successful face detections are required before saving.");
       return;
     }
@@ -790,17 +924,20 @@ export default function FaceRegister({
     setError("");
 
     try {
+      const targetStudentId = existingByStudentId?.studentId || studentId;
+      const targetName = fullName || existingByStudentId?.fullName || "Unknown";
+
       const nextRecord = normalizeRecord({
-        id: editingStudentId || studentId,
-        fullName,
-        studentId,
+        id: existingByStudentId?.id || editingStudentId || targetStudentId,
+        fullName: targetName,
+        studentId: targetStudentId,
         program,
         year,
         phone,
-        photos: draftPhotos,
-        descriptors: draftDescriptors,
+        photos: mergedPhotos,
+        descriptors: mergedDescriptors,
         createdAt:
-          registry.find((entry) => entry.studentId === editingStudentId)?.createdAt ||
+          baseRecord?.createdAt ||
           new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
@@ -810,20 +947,47 @@ export default function FaceRegister({
         return;
       }
 
-      if (editingStudentId && editingStudentId !== studentId) {
+      if (editingStudentId && editingStudentId !== targetStudentId) {
         faceEngine.clearPerson(editingStudentId);
+        try {
+          await axios.delete(`${API_BASE}/api/students/${encodeURIComponent(editingStudentId)}`);
+        } catch (deleteError) {
+          if (deleteError?.response?.status !== 404) {
+            throw deleteError;
+          }
+        }
       }
 
-      faceEngine.setPersonDescriptors(studentId, fullName, draftDescriptors);
+      faceEngine.setPersonDescriptors(
+        nextRecord.studentId,
+        nextRecord.fullName,
+        nextRecord.descriptors
+      );
 
       setRegistry((prev) => {
-        const exists = prev.some((entry) => entry.studentId === editingStudentId);
+        const targetId = existingByStudentId?.studentId || editingStudentId || "";
+        const mergedSourceId =
+          editingStudentId && existingByStudentId && editingStudentId !== existingByStudentId.studentId
+            ? editingStudentId
+            : "";
+        const baseList = mergedSourceId
+          ? prev.filter((entry) => entry.studentId !== mergedSourceId)
+          : prev;
+        const exists = prev.some(
+          (entry) => entry.studentId === targetId || entry.studentId === nextRecord.studentId
+        );
+
         if (!exists) {
-          return [nextRecord, ...prev];
+          return [
+            nextRecord,
+            ...baseList.filter((entry) => entry.studentId !== nextRecord.studentId),
+          ];
         }
 
-        return prev.map((entry) =>
-          entry.studentId === editingStudentId ? nextRecord : entry
+        return baseList.map((entry) =>
+          entry.studentId === targetId || entry.studentId === nextRecord.studentId
+            ? nextRecord
+            : entry
         );
       });
 
@@ -846,7 +1010,7 @@ export default function FaceRegister({
       resetEditor();
       setConsistencyReport(report);
       setSuccess(
-        `${fullName} registered! System will now recognize him on all cameras.`
+        `${nextRecord.fullName} registered! System will now recognize him on all cameras.`
       );
     } catch (saveError) {
       setError("Failed to save registration.");
@@ -869,24 +1033,67 @@ export default function FaceRegister({
     resetEditor,
   ]);
 
+  const clearAllData = useCallback(async () => {
+    const confirmation = window.prompt(
+      "Type CLEAR to delete all students and face data."
+    );
+
+    if (confirmation !== "CLEAR") {
+      setError("Clear all cancelled.");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      await axios.delete(`${API_BASE}/api/students`);
+      faceEngine.clearAllPeople();
+      clearAllLocalRegistries();
+      setRegistry([]);
+      window.location.reload();
+    } catch (clearError) {
+      setError("Failed to clear all student data.");
+      setBusy(false);
+    }
+  }, []);
+
   const removeRecord = useCallback(
-    (record) => {
+    async (record) => {
       const confirmed = window.confirm(
-        `Remove ${record.fullName} (${record.studentId}) from registry?`
+        `Remove ${record.fullName} from system? This will delete all their tracking data.`
       );
       if (!confirmed) {
         return;
       }
 
-      setRegistry((prev) => prev.filter((entry) => entry.studentId !== record.studentId));
-      faceEngine.clearPerson(record.studentId);
-
-      if (editingStudentId === record.studentId) {
-        resetEditor();
-      }
-
-      setSuccess(`${record.fullName} removed from registry.`);
+      setBusy(true);
       setError("");
+
+      try {
+        try {
+          await axios.delete(`${API_BASE}/api/students/${encodeURIComponent(record.studentId)}`);
+        } catch (deleteError) {
+          if (deleteError?.response?.status !== 404) {
+            setError("Failed to remove student from backend.");
+            return;
+          }
+        }
+
+        setRegistry((prev) => prev.filter((entry) => entry.studentId !== record.studentId));
+        faceEngine.clearPerson(record.studentId);
+        removeFromLocalRegistry(record.studentId);
+
+        if (editingStudentId === record.studentId) {
+          resetEditor();
+        }
+
+        setSuccess(`${record.fullName} removed from system.`);
+        setError("");
+      } finally {
+        setBusy(false);
+      }
     },
     [editingStudentId, resetEditor]
   );
@@ -1280,7 +1487,10 @@ export default function FaceRegister({
                       <button
                         type="button"
                         className="camera-remove-btn"
-                        onClick={() => removeRecord(entry)}
+                        onClick={() => {
+                          void removeRecord(entry);
+                        }}
+                        disabled={busy}
                       >
                         Remove
                       </button>
@@ -1288,6 +1498,21 @@ export default function FaceRegister({
                   </article>
                 );
               })}
+            </div>
+
+            <div className="registry-danger-zone">
+              <p className="danger-zone-title">Danger Zone</p>
+              <p className="muted">Use this only to remove test entries like tempp/dds.</p>
+              <button
+                type="button"
+                className="danger-btn"
+                onClick={() => {
+                  void clearAllData();
+                }}
+                disabled={busy}
+              >
+                Clear All Data
+              </button>
             </div>
           </section>
         </div>

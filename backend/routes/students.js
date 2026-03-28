@@ -26,6 +26,27 @@ module.exports = function studentsRouter(io) {
     }
   });
 
+  router.delete("/", (req, res) => {
+    const removedStudents = studentStore.clearStudents();
+
+    removedStudents.forEach((student) => {
+      const studentId = String(student?.studentId || "").trim();
+      if (!studentId) {
+        return;
+      }
+
+      io.emit("student:removed", { studentId });
+      io.emit("student:delete", { studentId });
+    });
+
+    io.emit("students:cleared", { count: removedStudents.length });
+
+    return res.json({
+      success: true,
+      removedCount: removedStudents.length,
+    });
+  });
+
   router.get("/:id", (req, res) => {
     const student = studentStore.getStudent(req.params.id);
     if (!student) {
@@ -46,15 +67,23 @@ module.exports = function studentsRouter(io) {
   });
 
   router.delete("/:id", (req, res) => {
-    const removed = studentStore.deleteStudent(req.params.id);
+    const { id } = req.params;
+    const removed = studentStore.remove(id);
     if (!removed) {
-      return res.status(404).json({ message: "Student not found" });
+      return res.status(404).json({ error: "Student not found" });
     }
 
-    return res.json({
-      message: "Student deleted",
-      student: removed,
+    const studentId = String(removed.studentId || id).trim();
+
+    io.emit("student:removed", {
+      studentId,
     });
+
+    io.emit("student:delete", {
+      studentId,
+    });
+
+    return res.json({ success: true });
   });
 
   router.patch("/:id/location", (req, res) => {

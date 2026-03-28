@@ -4,9 +4,9 @@ import { faceEngine } from "../lib/faceEngine";
 const DETECTION_INTERVAL_MS = 1500;
 const MJPEG_DETECTION_INTERVAL_MS = 2000;
 const DRAW_FRAME_INTERVAL_MS = 1000 / 30;
-const DETECTION_HOLD_MS = 2000;
+const DETECTION_HOLD_MS = 800;
 const MJPEG_CONNECT_TIMEOUT_MS = 8000;
-const DETECTION_COOLDOWN_MS = 2500;
+const DETECTION_COOLDOWN_MS = 15000;
 const MJPEG_WIDTH = 640;
 const MJPEG_HEIGHT = 480;
 const BACKEND = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
@@ -23,9 +23,6 @@ function getStatusPriority(statusType) {
   }
   if (statusType === "temporal") {
     return 3;
-  }
-  if (statusType === "uncertain") {
-    return 2;
   }
   if (statusType === "unknown") {
     return 1;
@@ -346,7 +343,7 @@ export default function CameraFeed({
               return null;
             }
 
-            const statusType = ["identified", "temporal", "uncertain", "unknown"].includes(item?.statusType)
+            const statusType = ["identified", "temporal", "unknown"].includes(item?.statusType)
               ? item.statusType
               : item?.match
                 ? "identified"
@@ -356,9 +353,7 @@ export default function CameraFeed({
 
             const defaultColor = statusType === "identified" || statusType === "temporal"
               ? "#00ff88"
-              : statusType === "uncertain"
-                ? "#ffb547"
-                : "#ffd447";
+              : "#ffd447";
 
             return {
               match: item?.match || null,
@@ -414,7 +409,7 @@ export default function CameraFeed({
           }
 
           const confidence = Number(item.emitConfidence ?? item.match.confidence ?? 0);
-          if (!Number.isFinite(confidence) || confidence <= 0) {
+          if (!Number.isFinite(confidence) || confidence <= 0.45) {
             return;
           }
 
@@ -488,11 +483,9 @@ export default function CameraFeed({
       ? "identified"
       : statusInfo.type === "temporal"
         ? "temporal"
-        : statusInfo.type === "uncertain"
-          ? "uncertain"
-      : statusInfo.type === "unknown"
-        ? "unknown"
-        : "idle";
+        : statusInfo.type === "unknown"
+          ? "unknown"
+          : "idle";
 
   const statusText = isDetecting ? "Scanning..." : statusInfo.text;
 

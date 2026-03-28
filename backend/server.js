@@ -92,13 +92,35 @@ function clampConfidence(value) {
   return Math.max(0, Math.min(1, value));
 }
 
+function resolveCameraLabel(cameraId, providedLabel) {
+  const incomingLabel = String(providedLabel || "").trim();
+  if (incomingLabel) {
+    return incomingLabel;
+  }
+
+  const key = String(cameraId || "").trim();
+  if (!key) {
+    return "Unknown Camera";
+  }
+
+  const active = activeCameras.get(key);
+  if (active?.cameraLabel) {
+    return String(active.cameraLabel);
+  }
+
+  return "Unknown Camera";
+}
+
 function applyFaceDetection(payload) {
   const eventTime = parseEventTimestamp(payload.timestamp);
+  const cameraId = String(payload.cameraId || "unknown-camera");
+  const cameraLabel = resolveCameraLabel(cameraId, payload.cameraLabel);
+
   return studentStore.applyFaceDetection({
     studentId: payload.studentId,
     studentName: payload.studentName,
-    cameraId: String(payload.cameraId || "unknown-camera"),
-    cameraLabel: String(payload.cameraLabel || "Unknown Camera"),
+    cameraId,
+    cameraLabel,
     timestamp: eventTime,
   });
 }
@@ -199,13 +221,15 @@ io.on("connection", (socket) => {
 
     const timestamp = parseEventTimestamp(payload.timestamp).toISOString();
     const confidence = clampConfidence(payload.confidence);
+    const cameraId = String(payload.cameraId || "unknown-camera");
+    const cameraLabel = resolveCameraLabel(cameraId, payload.cameraLabel);
 
     io.emit("student:update", updated);
     io.emit("detection:event", {
       studentId: updated.studentId,
       studentName: payload.studentName || updated.name,
-      cameraId: String(payload.cameraId || "unknown-camera"),
-      cameraLabel: String(payload.cameraLabel || "Unknown Camera"),
+      cameraId,
+      cameraLabel,
       confidence,
       timestamp,
       method: "FACE-API",

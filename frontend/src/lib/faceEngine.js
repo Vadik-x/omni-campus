@@ -3,18 +3,17 @@ import * as faceapi from "@vladmandic/face-api";
 const MODEL_URI = "/models";
 const STORAGE_KEY = "omni_face_registry";
 
-const MATCH_THRESHOLD = 0.52;
+const MATCH_THRESHOLD = 0.55;
 const DEFAULT_UPSCALE_FACTOR = 2;
 const SSD_MIN_CONFIDENCE = 0.3;
 const SSD_MAX_RESULTS = 10;
 const TINY_FALLBACK_INPUT_SIZE = 416;
 const TINY_FALLBACK_SCORE_THRESHOLD = 0.2;
 
-const TRACK_CONFIRMATION_FRAMES = 3;
+const TRACK_CONFIRMATION_FRAMES = 2;
 const TRACK_IOU_THRESHOLD = 0.5;
-const TRACK_MAX_AGE_MS = 4000;
-const TRACK_PERSIST_NO_FACE_MS = 1800;
-const COLOR_SIGNATURE_SIMILARITY_THRESHOLD = 0.4;
+const TRACK_MAX_AGE_MS = 800;
+const TRACK_PERSIST_NO_FACE_MS = 800;
 
 const REGISTRATION_CAPTURE_DELAY_MS = 500;
 const DEFAULT_REGISTRATION_STEPS = [
@@ -88,71 +87,6 @@ function buildTrackId(counter) {
   return `trk-${counter.toString(36)}-${Date.now().toString(36)}`;
 }
 
-function hueToFamily(hue) {
-  if (hue < 15 || hue >= 345) {
-    return "red";
-  }
-  if (hue < 45) {
-    return "orange";
-  }
-  if (hue < 70) {
-    return "yellow";
-  }
-  if (hue < 160) {
-    return "green";
-  }
-  if (hue < 200) {
-    return "cyan";
-  }
-  if (hue < 255) {
-    return "blue";
-  }
-  if (hue < 300) {
-    return "purple";
-  }
-  return "magenta";
-}
-
-function rgbToHsv(r, g, b) {
-  const rn = r / 255;
-  const gn = g / 255;
-  const bn = b / 255;
-
-  const max = Math.max(rn, gn, bn);
-  const min = Math.min(rn, gn, bn);
-  const delta = max - min;
-
-  let hue = 0;
-  if (delta > 0) {
-    if (max === rn) {
-      hue = ((gn - bn) / delta) % 6;
-    } else if (max === gn) {
-      hue = (bn - rn) / delta + 2;
-    } else {
-      hue = (rn - gn) / delta + 4;
-    }
-
-    hue *= 60;
-    if (hue < 0) {
-      hue += 360;
-    }
-  }
-
-  const saturation = max === 0 ? 0 : delta / max;
-  const brightness = max;
-
-  return {
-    hue,
-    saturation,
-    brightness,
-  };
-}
-
-function circularHueDistance(a, b) {
-  const delta = Math.abs(Number(a || 0) - Number(b || 0));
-  return Math.min(delta, 360 - delta);
-}
-
 function intersectionOverUnion(boxA, boxB) {
   if (!boxA || !boxB) {
     return 0;
@@ -204,15 +138,6 @@ function resolveUiPresentation(displayState, name, confidence) {
       boxColor: "#00ff88",
       boxDashed: true,
       statusType: "temporal",
-    };
-  }
-
-  if (displayState === "color") {
-    return {
-      displayLabel: `${name}? ${Math.round(clamp(confidence, 0, 1) * 100)}%`,
-      boxColor: "#ffb547",
-      boxDashed: false,
-      statusType: "uncertain",
     };
   }
 
@@ -720,173 +645,6 @@ class FaceEngine {
     };
   }
 
-  colorSignature(imageElement, boundingBox) {
-    if (!imageElement || !boundingBox || typeof document === "undefined") {
-      return null;
-    }
-
-    const { width: srcWidth, height: srcHeight } = getElementDimensions(imageElement);
-    if (!srcWidth || !srcHeight) {
-      return null;
-    }
-
-    const faceX = clamp(Math.round(Number(boundingBox.x || 0)), 0, srcWidth - 1);
-    const faceY = clamp(Math.round(Number(boundingBox.y || 0)), 0, srcHeight - 1);
-    const faceW = clamp(Math.round(Number(boundingBox.width || 0)), 1, srcWidth - faceX);
-    const faceH = clamp(Math.round(Number(boundingBox.height || 0)), 1, srcHeight - faceY);
-
-    let bodyX = clamp(Math.round(faceX - faceW * 0.15), 0, srcWidth - 1);
-    let bodyY = clamp(Math.round(faceY + faceH * 0.95), 0, srcHeight - 1);
-    let bodyW = clamp(Math.round(faceW * 1.3), 1, srcWidth - bodyX);
-    let bodyH = clamp(Math.round(faceH * 1.6), 1, srcHeight - bodyY);
-
-    if (bodyW < 4 || bodyH < 4) {
-      bodyX = faceX;
-      bodyY = faceY;
-      bodyW = faceW;
-      bodyH = faceH;
-    }
-
-    const sampleCanvas = document.createElement("canvas");
-    sampleCanvas.width = 48;
-    sampleCanvas.height = 48;
-    const context = sampleCanvas.getContext("2d", { willReadFrequently: true });
-    if (!context) {
-      return null;
-    }
-
-    try {
-      context.drawImage(
-        imageElement,
-        bodyX,
-        bodyY,
-        bodyW,
-        bodyH,
-        0,
-        0,
-        sampleCanvas.width,
-        sampleCanvas.height
-      );
-    } catch (error) {
-      return null;
-    }
-
-    const pixels = context.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
-
-    const colorBuckets = new Map();
-    for (let i = 0; i < pixels.length; i += 4) {
-      const alpha = pixels[i + 3];
-      if (alpha < 24) {
-        continue;
-      }
-
-      const qr = (pixels[i] >> 4) << 4;
-      const qg = (pixels[i + 1] >> 4) << 4;
-      const qb = (pixels[i + 2] >> 4) << 4;
-      const key = `${qr}-${qg}-${qb}`;
-      colorBuckets.set(key, (colorBuckets.get(key) || 0) + 1);
-    }
-
-    const topColors = Array.from(colorBuckets.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10);
-
-    if (topColors.length === 0) {
-      return null;
-    }
-
-    const hueHistogram = new Array(36).fill(0);
-    let satSum = 0;
-    let briSum = 0;
-    let weightSum = 0;
-
-    topColors.forEach(([key, count]) => {
-      const [r, g, b] = key.split("-").map((value) => Number(value) || 0);
-      const hsv = rgbToHsv(r, g, b);
-      const bin = clamp(Math.floor(hsv.hue / 10), 0, 35);
-
-      hueHistogram[bin] += count;
-      satSum += hsv.saturation * count;
-      briSum += hsv.brightness * count;
-      weightSum += count;
-    });
-
-    if (weightSum <= 0) {
-      return null;
-    }
-
-    let dominantBin = 0;
-    for (let i = 1; i < hueHistogram.length; i += 1) {
-      if (hueHistogram[i] > hueHistogram[dominantBin]) {
-        dominantBin = i;
-      }
-    }
-
-    const dominantHue = (dominantBin * 10 + 5) % 360;
-    const saturation = clamp(satSum / weightSum, 0, 1);
-    const brightness = clamp(briSum / weightSum, 0, 1);
-
-    const satLevel = saturation >= 0.66
-      ? "high-sat"
-      : saturation >= 0.4
-        ? "mid-sat"
-        : "low-sat";
-
-    return {
-      dominantHue,
-      saturation: Number(saturation.toFixed(3)),
-      brightness: Number(brightness.toFixed(3)),
-      signature: `${hueToFamily(dominantHue)}-${satLevel}`,
-    };
-  }
-
-  colorSimilarity(signatureA, signatureB) {
-    if (!signatureA || !signatureB) {
-      return 0;
-    }
-
-    const hueScore = 1 - circularHueDistance(signatureA.dominantHue, signatureB.dominantHue) / 180;
-    const saturationScore = 1 - Math.abs(Number(signatureA.saturation || 0) - Number(signatureB.saturation || 0));
-    const brightnessScore = 1 - Math.abs(Number(signatureA.brightness || 0) - Number(signatureB.brightness || 0));
-    const signatureBonus = signatureA.signature === signatureB.signature ? 0.12 : 0;
-
-    return clamp(
-      0.62 * hueScore + 0.23 * saturationScore + 0.15 * brightnessScore + signatureBonus,
-      0,
-      1
-    );
-  }
-
-  findBestTrackByColor(signature, tracks, excludedTrackId = "") {
-    if (!signature) {
-      return null;
-    }
-
-    let best = null;
-    tracks.forEach((track) => {
-      if (!track || !track.personId || !track.colorSignature) {
-        return;
-      }
-      if (excludedTrackId && track.trackId === excludedTrackId) {
-        return;
-      }
-
-      const similarity = this.colorSimilarity(signature, track.colorSignature);
-      if (!best || similarity > best.similarity) {
-        best = {
-          track,
-          similarity,
-        };
-      }
-    });
-
-    if (!best || best.similarity < COLOR_SIGNATURE_SIMILARITY_THRESHOLD) {
-      return null;
-    }
-
-    return best;
-  }
-
   selectTrackForBox(box, tracks, usedTrackIds) {
     let bestTrack = null;
     let bestIou = 0;
@@ -925,13 +683,16 @@ class FaceEngine {
     emitConfidence,
     detector,
     distance,
-    colorSignature,
   }) {
     const ui = resolveUiPresentation(displayState, name, confidence);
 
     const normalizedConfidence = Number(clamp(confidence || 0, 0, 1).toFixed(3));
     const normalizedEmitConfidence = Number(clamp(emitConfidence || 0, 0, 1).toFixed(3));
-    const shouldEmit = Boolean(personId) && Boolean(isConfirmed) && normalizedEmitConfidence > 0;
+    const shouldEmit =
+      Boolean(personId)
+      && Boolean(isConfirmed)
+      && displayState === "face"
+      && normalizedEmitConfidence > 0.45;
 
     return {
       box,
@@ -952,7 +713,6 @@ class FaceEngine {
       displayLabel: ui.displayLabel,
       boxColor: ui.boxColor,
       boxDashed: ui.boxDashed,
-      colorSignature: colorSignature || null,
       isConfirmed,
       shouldEmit,
       emitConfidence: normalizedEmitConfidence,
@@ -996,59 +756,68 @@ class FaceEngine {
       const descriptorArray = toDescriptorArray(descriptorFloat) || [];
 
       const faceMatch = this.identifyFace(descriptorFloat);
-      const bodySignature = this.colorSignature(videoElement, scaledBox);
 
-      let personId = previousTrack?.personId || null;
-      let name = previousTrack?.name || "Unknown";
-      let confidence = previousTrack?.confidence || 0;
+      let personId = null;
+      let name = "Unknown";
+      let confidence = 0;
       let displayState = "unknown";
       let emitConfidence = 0;
       let distance = null;
+      let consecutiveFrames = 0;
+      let isConfirmed = false;
 
       if (faceMatch) {
         personId = faceMatch.personId;
         name = faceMatch.name;
         confidence = Number(faceMatch.confidence || 0);
-        displayState = "face";
-        emitConfidence = confidence;
         distance = faceMatch.distance;
-      } else {
-        const colorMatch = this.findBestTrackByColor(bodySignature, activeTracks, trackId);
 
-        if (colorMatch) {
-          personId = colorMatch.track.personId;
-          name = colorMatch.track.name;
-          confidence = clamp(Math.max(0.65, colorMatch.similarity), 0, 0.95);
-          displayState = "color";
-          emitConfidence = 0.3;
-        } else if (previousTrack?.personId) {
+        const isSamePersonAsPrevious =
+          Boolean(previousTrack?.personId)
+          && previousTrack.personId === faceMatch.personId
+          && previousTrack.lastMatchType === "face";
+        consecutiveFrames = isSamePersonAsPrevious
+          ? Number(previousTrack?.consecutiveFrames || 0) + 1
+          : 1;
+        isConfirmed = consecutiveFrames >= TRACK_CONFIRMATION_FRAMES;
+
+        if (isConfirmed) {
+          displayState = "face";
+          emitConfidence = confidence;
+        }
+      } else if (previousTrack?.personId && previousTrack?.isConfirmed) {
+        const ageMs = now - Number(previousTrack.lastSeenAt || 0);
+        if (ageMs <= TRACK_PERSIST_NO_FACE_MS) {
           personId = previousTrack.personId;
           name = previousTrack.name;
-          confidence = clamp(Number(previousTrack.confidence || 0.6) * 0.92, 0.35, 0.95);
+          confidence = clamp(Number(previousTrack.confidence || 0.55) * 0.96, 0.45, 0.99);
           displayState = "temporal";
-          emitConfidence = 0.3;
+          consecutiveFrames = Number(previousTrack.consecutiveFrames || TRACK_CONFIRMATION_FRAMES);
+          isConfirmed = true;
         }
       }
-
-      const consecutiveFrames = previousTrack ? Number(previousTrack.consecutiveFrames || 0) + 1 : 1;
-      const isConfirmed = consecutiveFrames >= TRACK_CONFIRMATION_FRAMES;
 
       const updatedTrack = {
         trackId,
         personId,
         name,
-        lastFaceDescriptor: faceMatch
-          ? descriptorArray
-          : previousTrack?.lastFaceDescriptor || null,
-        colorSignature: bodySignature || previousTrack?.colorSignature || null,
-        lastSeenAt: now,
+        lastFaceDescriptor: descriptorArray,
+        lastSeenAt:
+          faceMatch || displayState === "unknown"
+            ? now
+            : Number(previousTrack?.lastSeenAt || now),
         confidence: Number(clamp(confidence, 0, 1).toFixed(3)),
         consecutiveFrames,
         lastBox: scaledBox,
         isConfirmed,
+        lastMatchType: faceMatch ? "face" : displayState,
       };
 
       nextTrackingState.set(trackId, updatedTrack);
+
+      if (faceMatch && !isConfirmed) {
+        return;
+      }
 
       outputs.push(
         this.buildDetectionOutput({
@@ -1063,81 +832,45 @@ class FaceEngine {
           emitConfidence,
           detector,
           distance,
-          colorSignature: updatedTrack.colorSignature,
         })
       );
     });
 
-    if (detections.length === 0) {
-      activeTracks.forEach((track) => {
-        const ageMs = now - Number(track.lastSeenAt || 0);
-        if (ageMs > TRACK_PERSIST_NO_FACE_MS || !track.lastBox) {
-          if (ageMs <= TRACK_MAX_AGE_MS) {
-            nextTrackingState.set(track.trackId, track);
-          }
-          return;
-        }
+    activeTracks.forEach((track) => {
+      if (usedTrackIds.has(track.trackId)) {
+        return;
+      }
 
-        const currentColorSignature = this.colorSignature(videoElement, track.lastBox);
-        let personId = track.personId || null;
-        let name = track.name || "Unknown";
-        let confidence = clamp(Number(track.confidence || 0.55), 0, 1);
-        let displayState = personId ? "temporal" : "unknown";
-        let emitConfidence = personId ? 0.3 : 0;
+      const ageMs = now - Number(track.lastSeenAt || 0);
+      if (ageMs > TRACK_MAX_AGE_MS) {
+        return;
+      }
 
-        const colorMatch = this.findBestTrackByColor(currentColorSignature, activeTracks, track.trackId);
-        if (colorMatch) {
-          personId = colorMatch.track.personId;
-          name = colorMatch.track.name;
-          confidence = clamp(Math.max(0.65, colorMatch.similarity), 0, 0.95);
-          displayState = "color";
-          emitConfidence = 0.3;
-        }
+      nextTrackingState.set(track.trackId, track);
 
-        const consecutiveFrames = Number(track.consecutiveFrames || 0) + 1;
-        const isConfirmed = track.isConfirmed || consecutiveFrames >= TRACK_CONFIRMATION_FRAMES;
-
-        const carriedTrack = {
-          ...track,
-          personId,
-          name,
-          confidence: Number(clamp(confidence, 0, 1).toFixed(3)),
-          colorSignature: currentColorSignature || track.colorSignature || null,
-          lastSeenAt: now,
-          consecutiveFrames,
-          isConfirmed,
-        };
-
-        nextTrackingState.set(track.trackId, carriedTrack);
-
+      if (
+        track.personId
+        && track.isConfirmed
+        && track.lastBox
+        && ageMs <= TRACK_PERSIST_NO_FACE_MS
+      ) {
         outputs.push(
           this.buildDetectionOutput({
             box: track.lastBox,
             descriptor: track.lastFaceDescriptor || [],
-            personId,
-            name,
-            confidence,
-            displayState,
+            personId: track.personId,
+            name: track.name,
+            confidence: track.confidence,
+            displayState: "temporal",
             trackId: track.trackId,
-            isConfirmed,
-            emitConfidence,
+            isConfirmed: true,
+            emitConfidence: 0,
             detector: "temporal",
             distance: null,
-            colorSignature: carriedTrack.colorSignature,
           })
         );
-      });
-    } else {
-      activeTracks.forEach((track) => {
-        if (usedTrackIds.has(track.trackId)) {
-          return;
-        }
-
-        if (now - Number(track.lastSeenAt || 0) <= TRACK_MAX_AGE_MS) {
-          nextTrackingState.set(track.trackId, track);
-        }
-      });
-    }
+      }
+    });
 
     this.trackingState = new Map(
       Array.from(nextTrackingState.values())

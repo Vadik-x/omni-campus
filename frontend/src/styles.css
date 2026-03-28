@@ -14,6 +14,27 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: #1e4a7a #0a1628;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a1628;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e4a7a;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #00d4ff;
 }
 
 html,
@@ -868,6 +889,40 @@ body {
   flex-wrap: wrap;
 }
 
+.registry-danger-zone {
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid rgba(255, 112, 112, 0.45);
+  border-radius: 10px;
+  background: rgba(58, 8, 8, 0.4);
+  display: grid;
+  gap: 8px;
+}
+
+.danger-zone-title {
+  margin: 0;
+  color: #ff9b9b;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.danger-btn {
+  background: linear-gradient(120deg, #ff5d5d, #d92a2a);
+  color: #fff5f5;
+  border: 1px solid #ff8686;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.danger-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .error-text {
   color: #ff9494;
   margin: 8px 0 0;
@@ -931,6 +986,14 @@ body {
   gap: 12px;
 }
 
+.right-column-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+}
+
 .left-header {
   display: flex;
   flex-direction: column;
@@ -969,6 +1032,10 @@ input:focus {
   overflow: visible;
 }
 
+.student-card-shell {
+  position: relative;
+}
+
 .student-card {
   border: 1px solid #1b354d;
   border-radius: 10px;
@@ -986,6 +1053,32 @@ input:focus {
   border-color: var(--accent);
   background: #0d2740;
   box-shadow: 0 0 0 1px rgba(0, 212, 255, 0.5);
+}
+
+.student-card .student-header {
+  padding-right: 34px;
+}
+
+.student-delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid #29506b;
+  background: rgba(7, 23, 36, 0.9);
+  color: #9fc2d9;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  z-index: 3;
+}
+
+.student-delete-btn:hover {
+  color: #ff9a9a;
+  border-color: #8b3d3d;
+  background: rgba(38, 13, 13, 0.9);
 }
 
 .avatar {
@@ -1118,9 +1211,44 @@ input:focus {
 
 .map-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+.map-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.map-action-btn {
+  border: 1px solid #2d5f81;
+  border-radius: 999px;
+  background: rgba(0, 212, 255, 0.12);
+  color: #cbefff;
+  padding: 5px 10px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.map-action-btn:hover {
+  background: rgba(0, 212, 255, 0.22);
+}
+
+.map-action-btn.active {
+  border-color: #00d4ff;
+  color: #dff8ff;
+  background: rgba(0, 212, 255, 0.28);
+}
+
+.map-setting-instruction {
+  margin: 0;
+  color: #8fe2ff;
+  font-size: 0.78rem;
 }
 
 .legend {
@@ -1148,6 +1276,31 @@ input:focus {
 
 .dot.offline {
   background: var(--offline);
+}
+
+.map-icon-wrap {
+  background: transparent;
+  border: 0;
+}
+
+.map-icon-wrap span {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.campus-icon-wrap span {
+  border: 1px solid rgba(0, 212, 255, 0.65);
+  background: rgba(8, 35, 56, 0.92);
+}
+
+.camera-icon-wrap span {
+  border: 1px solid rgba(130, 189, 219, 0.65);
+  background: rgba(6, 22, 35, 0.92);
 }
 
 .leaflet-map {
@@ -1313,6 +1466,11 @@ select {
   color: #b2cce0;
 }
 
+.feed-line {
+  margin: 0;
+  color: #d6ecfb;
+}
+
 .feed-item.camera {
   border-left-color: #00d4ff;
 }
@@ -1355,6 +1513,28 @@ select {
 .detail-history-item small {
   margin: 2px 0;
   color: #9ec4da;
+}
+
+.detail-history-item strong {
+  color: #d8efff;
+}
+
+.trail-summary {
+  margin: 4px 0 8px;
+  color: #8fe2ff;
+}
+
+.app-toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 1300;
+  border: 1px solid #2e607f;
+  border-radius: 10px;
+  background: rgba(5, 18, 29, 0.94);
+  color: #d6f0ff;
+  padding: 10px 12px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
 }
 
 .muted {

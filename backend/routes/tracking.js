@@ -39,7 +39,10 @@ module.exports = function trackingRouter(io) {
 
       io.emit("student:update", updated);
       io.emit("detection:event", {
+        studentId: updated.studentId,
         studentName: updated.name,
+        cameraId: merged.buildingId,
+        cameraLabel: merged.buildingName,
         location: updated.currentLocation?.buildingName || merged.buildingName,
         method: merged.detectedBy,
         timestamp: eventTime,
@@ -77,7 +80,10 @@ module.exports = function trackingRouter(io) {
 
       io.emit("student:update", updated);
       io.emit("detection:event", {
+        studentId: updated.studentId,
         studentName: updated.name,
+        cameraId: buildingId,
+        cameraLabel: updated.currentLocation?.buildingName,
         location: updated.currentLocation?.buildingName,
         method: updated.currentLocation?.detectedBy || "CAMERA",
         timestamp: updated.currentLocation?.lastSeen || new Date(),

@@ -3,6 +3,7 @@ const path = require("path");
 
 const DATA_DIR = path.join(__dirname, "..", "data");
 const DATA_FILE = path.join(DATA_DIR, "students.json");
+const MAX_LOCATION_HISTORY = 10;
 
 let students = [];
 
@@ -47,7 +48,9 @@ function normalizeStudent(input = {}) {
       : "offline",
     isOnCampus: Boolean(input.isOnCampus),
     currentLocation: input.currentLocation || null,
-    locationHistory: Array.isArray(input.locationHistory) ? input.locationHistory : [],
+    locationHistory: Array.isArray(input.locationHistory)
+      ? input.locationHistory.slice(0, MAX_LOCATION_HISTORY)
+      : [],
     createdAt: input.createdAt || now,
     updatedAt: input.updatedAt || now,
   };
@@ -125,9 +128,16 @@ function updateLocation(id, locationData = {}) {
     : new Date();
   const safeTime = Number.isNaN(timestamp.getTime()) ? new Date() : timestamp;
 
+  const buildingId = String(
+    locationData.buildingId || locationData.cameraId || "unknown-camera"
+  );
+  const buildingName = String(
+    locationData.buildingName || locationData.cameraLabel || "Unknown Camera"
+  );
+
   const entry = {
-    buildingId: String(locationData.buildingId || "unknown-camera"),
-    buildingName: String(locationData.buildingName || "Unknown Camera"),
+    buildingId,
+    buildingName,
     detectedBy: String(locationData.detectedBy || "CAMERA"),
     timestamp: safeTime.toISOString(),
   };
@@ -138,7 +148,15 @@ function updateLocation(id, locationData = {}) {
     detectedBy: entry.detectedBy,
     lastSeen: safeTime.toISOString(),
   };
-  student.locationHistory = [...(student.locationHistory || []), entry].slice(-50);
+  if (!Array.isArray(student.locationHistory)) {
+    student.locationHistory = [];
+  }
+
+  student.locationHistory.unshift(entry);
+  if (student.locationHistory.length > MAX_LOCATION_HISTORY) {
+    student.locationHistory.pop();
+  }
+
   student.status = String(locationData.status || "online");
   student.isOnCampus = true;
   student.updatedAt = new Date().toISOString();
@@ -159,6 +177,13 @@ function remove(id) {
   return clone(deleted);
 }
 
+function removeAll() {
+  const removed = clone(students);
+  students = [];
+  save();
+  return removed;
+}
+
 initialize();
 
 module.exports = {
@@ -167,4 +192,5 @@ module.exports = {
   upsert,
   updateLocation,
   remove,
+  removeAll,
 };

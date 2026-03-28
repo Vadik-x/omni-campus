@@ -1,25 +1,62 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleMarker, MapContainer, Popup, TileLayer } from "react-leaflet";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import L from "leaflet";
+import {
+  CircleMarker,
+  MapContainer,
+  Marker,
+  Popup,
+  TileLayer,
+  useMap,
+  useMapEvents,
+} from "react-leaflet";
 
-const CAMPUS_CENTER = [12.9716, 77.5946];
+// Updated for RKGIT, Ghaziabad.
+const DEFAULT_MAP_CENTER = [28.6967, 77.4988];
+const DEFAULT_ZOOM_LEVEL = 15;
 const MAP_IDLE_TIMEOUT_MS = 7000;
-const BUILDING_POINTS = {
-  "Library - Block B": [12.97195, 77.5941],
-  "Main Gate": [12.9709, 77.5949],
-  "Admin Block": [12.9714, 77.5953],
-  "Engineering Block": [12.9722, 77.5948],
-  Hostel: [12.9725, 77.5938],
-  Auditorium: [12.9712, 77.5937],
-};
+const CAMERA_POSITION_OFFSETS = [
+  [0.0003, -0.0002],
+  [-0.0002, 0.00022],
+  [0.00018, 0.00028],
+  [-0.00028, -0.00016],
+  [0.00034, 0.00006],
+];
 
-const DEFAULT_CAMERA_POINTS = {
-  "Camera 1": [12.9719, 77.5942],
-  "Camera 2": [12.9713, 77.5950],
-  "Camera 3": [12.9723, 77.5939],
-  "camera-1": [12.9719, 77.5942],
-  "camera-2": [12.9713, 77.5950],
-  "camera-3": [12.9723, 77.5939],
-};
+const CAMPUS_ICON = L.divIcon({
+  className: "map-icon-wrap campus-icon-wrap",
+  html: '<span aria-hidden="true">🏫</span>',
+  iconSize: [28, 28],
+  iconAnchor: [14, 14],
+  popupAnchor: [0, -14],
+});
+
+const CAMERA_ICON = L.divIcon({
+  className: "map-icon-wrap camera-icon-wrap",
+  html: '<span aria-hidden="true">📷</span>',
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+  popupAnchor: [0, -12],
+});
+
+function normalizePoint(value, fallback = DEFAULT_MAP_CENTER) {
+  if (Array.isArray(value) && value.length >= 2) {
+    const lat = Number(value[0]);
+    const lng = Number(value[1]);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      return [lat, lng];
+    }
+  }
+
+  if (value && typeof value === "object") {
+    const lat = Number(value.lat);
+    const lng = Number(value.lng);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      return [lat, lng];
+    }
+  }
+
+  return [fallback[0], fallback[1]];
+}
 
 function statusColor(status = "offline") {
   if (status === "online") {
@@ -31,37 +68,68 @@ function statusColor(status = "offline") {
   return "#71808f";
 }
 
-function fallbackPoint(index) {
-  const lat = CAMPUS_CENTER[0] + ((index % 6) - 3) * 0.00025;
-  const lng = CAMPUS_CENTER[1] + ((index % 5) - 2) * 0.00022;
-  return [lat, lng];
+function fallbackPoint(index, center = DEFAULT_MAP_CENTER) {
+  const [offsetLat, offsetLng] =
+    CAMERA_POSITION_OFFSETS[index % CAMERA_POSITION_OFFSETS.length];
+  return [
+    Number((center[0] + offsetLat).toFixed(6)),
+    Number((center[1] + offsetLng).toFixed(6)),
+  ];
 }
 
-function studentPoint(student, index, cameraLocations = {}) {
+function cameraPoint(camera, index, cameraLocations = {}, center = DEFAULT_MAP_CENTER) {
+  const cameraId = String(camera?.cameraId || `camera-${index + 1}`);
+  const cameraLabel = String(camera?.cameraLabel || `Camera ${index + 1}`);
+
+  if (cameraLocations[cameraId]) {
+    return normalizePoint(cameraLocations[cameraId], center);
+  }
+
+  if (cameraLocations[cameraLabel]) {
+    return normalizePoint(cameraLocations[cameraLabel], center);
+  }
+
+  return fallbackPoint(index, center);
+}
+
+function studentPoint(student, cameraLocations = {}, center = DEFAULT_MAP_CENTER) {
   const buildingId = student.currentLocation?.buildingId;
   const buildingName = student.currentLocation?.buildingName;
 
   if (buildingId && cameraLocations[buildingId]) {
-    return cameraLocations[buildingId];
+    return normalizePoint(cameraLocations[buildingId], center);
   }
 
   if (buildingName && cameraLocations[buildingName]) {
-    return cameraLocations[buildingName];
+    return normalizePoint(cameraLocations[buildingName], center);
   }
 
-  if (buildingId && DEFAULT_CAMERA_POINTS[buildingId]) {
-    return DEFAULT_CAMERA_POINTS[buildingId];
-  }
+  return [center[0], center[1]];
+}
 
-  if (buildingName && DEFAULT_CAMERA_POINTS[buildingName]) {
-    return DEFAULT_CAMERA_POINTS[buildingName];
-  }
+function CampusCenterClickHandler({ enabled, onPick }) {
+  useMapEvents({
+    click(event) {
+      if (!enabled || typeof onPick !== "function") {
+        return;
+      }
 
-  if (buildingName && BUILDING_POINTS[buildingName]) {
-    return BUILDING_POINTS[buildingName];
-  }
+      onPick([event.latlng.lat, event.latlng.lng]);
+    },
+  });
 
-  return fallbackPoint(index);
+  return null;
+}
+
+function MapCenterSync({ center }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const target = normalizePoint(center, DEFAULT_MAP_CENTER);
+    map.setView(target, map.getZoom(), { animate: true });
+  }, [center, map]);
+
+  return null;
 }
 
 export default function CampusMap({
@@ -69,6 +137,10 @@ export default function CampusMap({
   onSelectStudent,
   cameraLocations = {},
   cameras = [],
+  campusCenter = DEFAULT_MAP_CENTER,
+  zoomLevel = DEFAULT_ZOOM_LEVEL,
+  onCampusCenterChange,
+  onCameraPositionChange,
   isExpanded = true,
 }) {
   const mapInstance = useRef(null);
@@ -76,7 +148,25 @@ export default function CampusMap({
   const idleTimerRef = useRef(null);
   const [mapReadyToken, setMapReadyToken] = useState(0);
   const [isMapActive, setIsMapActive] = useState(false);
-  const [hasClickedToInteract, setHasClickedToInteract] = useState(false);
+  const [isSettingCampusCenter, setIsSettingCampusCenter] = useState(false);
+
+  const safeCampusCenter = useMemo(
+    () => normalizePoint(campusCenter, DEFAULT_MAP_CENTER),
+    [campusCenter]
+  );
+
+  const cameraMarkers = useMemo(() => {
+    return cameras.map((camera, index) => {
+      const cameraId = String(camera?.cameraId || `camera-${index + 1}`);
+      const cameraLabel = String(camera?.cameraLabel || `Camera ${index + 1}`);
+
+      return {
+        cameraId,
+        cameraLabel,
+        position: cameraPoint(camera, index, cameraLocations, safeCampusCenter),
+      };
+    });
+  }, [cameraLocations, cameras, safeCampusCenter]);
 
   const clearIdleTimer = useCallback(() => {
     if (idleTimerRef.current) {
@@ -137,7 +227,6 @@ export default function CampusMap({
   const activateMap = useCallback(() => {
     enableMapInteractions();
     setIsMapActive(true);
-    setHasClickedToInteract(true);
     scheduleIdleDeactivation();
   }, [enableMapInteractions, scheduleIdleDeactivation]);
 
@@ -151,7 +240,7 @@ export default function CampusMap({
     });
 
     return () => cancelAnimationFrame(frameId);
-  }, [cameras, isExpanded, students.length, cameraLocations]);
+  }, [cameraMarkers.length, isExpanded, students.length, cameraLocations]);
 
   useEffect(() => {
     const map = mapInstance.current;
@@ -238,29 +327,81 @@ export default function CampusMap({
     }
   };
 
+  const handleCampusLocationPick = useCallback(
+    (nextPoint) => {
+      const normalized = normalizePoint(nextPoint, safeCampusCenter);
+      if (typeof onCampusCenterChange === "function") {
+        onCampusCenterChange(normalized);
+      }
+
+      setIsSettingCampusCenter(false);
+
+      const map = mapInstance.current;
+      if (map) {
+        map.setView(normalized, map.getZoom(), { animate: true });
+      }
+    },
+    [onCampusCenterChange, safeCampusCenter]
+  );
+
+  const handleCameraDragEnd = useCallback(
+    (camera, event) => {
+      const latLng = event?.target?.getLatLng?.();
+      if (!latLng) {
+        return;
+      }
+
+      if (typeof onCameraPositionChange === "function") {
+        onCameraPositionChange({
+          cameraId: camera.cameraId,
+          cameraLabel: camera.cameraLabel,
+          position: [latLng.lat, latLng.lng],
+        });
+      }
+    },
+    [onCameraPositionChange]
+  );
+
   return (
     <section className="panel map-wrap">
       <div className="map-head">
         <h3>Campus Map</h3>
-        <div className="legend">
-          <span><i className="dot online"></i>Online</span>
-          <span><i className="dot alert"></i>Alert</span>
-          <span><i className="dot offline"></i>Offline</span>
+        <div className="map-head-actions">
+          <button
+            type="button"
+            className={`map-action-btn${isSettingCampusCenter ? " active" : ""}`}
+            onClick={() => {
+              setIsSettingCampusCenter((prev) => !prev);
+              activateMap();
+            }}
+          >
+            {isSettingCampusCenter ? "Cancel" : "Set Campus Location"}
+          </button>
+          <div className="legend">
+            <span><i className="dot online"></i>Online</span>
+            <span><i className="dot alert"></i>Alert</span>
+            <span><i className="dot offline"></i>Offline</span>
+          </div>
         </div>
       </div>
+      {isSettingCampusCenter ? (
+        <p className="map-setting-instruction">
+          Click anywhere on the map to set your campus location
+        </p>
+      ) : null}
       <div
         ref={mapShellRef}
         className={`campus-map-shell${isMapActive ? " active" : ""}`}
         tabIndex={0}
         role="region"
         aria-label="Campus map. Click or press Enter to interact, and press Escape to exit map interaction mode."
-        aria-describedby={hasClickedToInteract ? undefined : "map-interaction-hint"}
+        aria-describedby="map-interaction-hint"
         onClick={activateMap}
         onKeyDown={handleMapKeyDown}
       >
         <MapContainer
-          center={CAMPUS_CENTER}
-          zoom={17}
+          center={safeCampusCenter}
+          zoom={zoomLevel}
           className="leaflet-map"
           zoomControl={false}
           scrollWheelZoom={false}
@@ -275,12 +416,45 @@ export default function CampusMap({
             setMapReadyToken((prev) => prev + 1);
           }}
         >
+          <MapCenterSync center={safeCampusCenter} />
+          <CampusCenterClickHandler
+            enabled={isSettingCampusCenter}
+            onPick={handleCampusLocationPick}
+          />
+
           <TileLayer
             attribution='&copy; OpenStreetMap &copy; CARTO'
             url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
           />
-          {students.map((student, index) => {
-            const position = studentPoint(student, index, cameraLocations);
+
+          <Marker position={safeCampusCenter} icon={CAMPUS_ICON}>
+            <Popup>
+              <strong>Campus Center</strong>
+              <br />
+              {safeCampusCenter[0].toFixed(5)}, {safeCampusCenter[1].toFixed(5)}
+            </Popup>
+          </Marker>
+
+          {cameraMarkers.map((camera, index) => (
+            <Marker
+              key={`${camera.cameraId}-${index}`}
+              position={camera.position}
+              icon={CAMERA_ICON}
+              draggable
+              eventHandlers={{
+                dragend: (event) => handleCameraDragEnd(camera, event),
+              }}
+            >
+              <Popup>
+                <strong>{camera.cameraLabel}</strong>
+                <br />
+                Drag to set camera position
+              </Popup>
+            </Marker>
+          ))}
+
+          {students.map((student) => {
+            const position = studentPoint(student, cameraLocations, safeCampusCenter);
             return (
               <CircleMarker
                 key={student.studentId}
@@ -302,8 +476,6 @@ export default function CampusMap({
                   {student.program}
                   <br />
                   {student.currentLocation?.buildingName || "Unknown"}
-                  <br />
-                  {student.currentLocation?.buildingId || "unmapped-camera"}
                 </Popup>
               </CircleMarker>
             );
@@ -316,14 +488,9 @@ export default function CampusMap({
           </div>
         ) : null}
 
-        {!hasClickedToInteract ? (
-          <div
-            id="map-interaction-hint"
-            className="map-interaction-hint"
-            role="status"
-            aria-live="polite"
-          >
-            Click to zoom • Scroll inside map to zoom in/out
+        {!isMapActive ? (
+          <div id="map-interaction-hint" className="map-interaction-hint" role="status" aria-live="polite">
+            Click map to enable scroll zoom
           </div>
         ) : null}
       </div>

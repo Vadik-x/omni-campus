@@ -3,6 +3,8 @@ const path = require("path");
 
 const DATA_DIR = path.join(__dirname, "..", "data");
 const DATA_FILE = path.join(DATA_DIR, "students.json");
+const MAX_LOCATION_HISTORY = 10;
+const NAME_SIMILARITY_THRESHOLD = 0.88;
 
 let students = [];
 
@@ -39,6 +41,147 @@ function normalizeDescriptor(value) {
     .filter((item) => Number.isFinite(item));
 }
 
+function normalizeNameForComparison(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function levenshteinDistance(a, b) {
+  if (a === b) {
+    return 0;
+  }
+
+  if (!a.length) {
+    return b.length;
+  }
+
+  if (!b.length) {
+    return a.length;
+  }
+
+  const matrix = Array.from({ length: a.length + 1 }, () =>
+    new Array(b.length + 1).fill(0)
+  );
+
+  for (let i = 0; i <= a.length; i += 1) {
+    matrix[i][0] = i;
+  }
+
+  for (let j = 0; j <= b.length; j += 1) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+
+  return matrix[a.length][b.length];
+}
+
+function computeNameSimilarity(candidate, query) {
+  const a = normalizeNameForComparison(candidate);
+  const b = normalizeNameForComparison(query);
+
+  if (!a || !b) {
+    return 0;
+  }
+
+  if (a === b) {
+    return 1;
+  }
+
+  if (a.includes(b) || b.includes(a)) {
+    return 0.94;
+  }
+
+  const distance = levenshteinDistance(a, b);
+  const denominator = Math.max(a.length, b.length);
+  if (!denominator) {
+    return 0;
+  }
+
+  return Math.max(0, 1 - distance / denominator);
+}
+
+function findStudentBySimilarName(name) {
+  let best = null;
+  let bestScore = 0;
+
+  students.forEach((student) => {
+    const score = computeNameSimilarity(student.name, name);
+    if (score > bestScore) {
+      best = student;
+      bestScore = score;
+    }
+  });
+
+  if (bestScore < NAME_SIMILARITY_THRESHOLD) {
+    return null;
+  }
+
+  return best;
+}
+
+function normalizeDescriptorHistory(value) {
+  const fromPayload = Array.isArray(value) ? value : [];
+  return fromPayload
+    .map((entry) => normalizeDescriptor(entry))
+    .filter((entry) => entry.length > 0);
+}
+
+function descriptorKey(descriptor) {
+  return normalizeDescriptor(descriptor)
+    .map((value) => value.toFixed(6))
+    .join(",");
+}
+
+function mergeDescriptorHistory(existing, incoming) {
+  const result = [];
+  const seen = new Set();
+
+  const pushDescriptor = (descriptor) => {
+    const normalized = normalizeDescriptor(descriptor);
+    if (normalized.length === 0) {
+      return;
+    }
+
+    const key = descriptorKey(normalized);
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    result.push(normalized);
+  };
+
+  normalizeDescriptorHistory(existing).forEach(pushDescriptor);
+  normalizeDescriptorHistory(incoming).forEach(pushDescriptor);
+
+  return result;
+}
+
+function normalizeLocationHistory(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const normalized = value.map(normalizeHistoryEntry);
+  normalized.sort(
+    (a, b) => safeDate(b.timestamp).getTime() - safeDate(a.timestamp).getTime()
+  );
+
+  return normalized.slice(0, MAX_LOCATION_HISTORY);
+}
+
 function normalizeHistoryEntry(value) {
   const timestamp = safeDate(value?.timestamp);
   return {
@@ -56,9 +199,13 @@ function normalizeStudent(input = {}) {
     return null;
   }
 
-  const history = Array.isArray(input.locationHistory)
-    ? input.locationHistory.map(normalizeHistoryEntry).slice(-50)
-    : [];
+  const descriptorHistory = mergeDescriptorHistory(
+    input.faceDescriptors,
+    Array.isArray(input.faceDescriptor) && input.faceDescriptor.length > 0
+      ? [input.faceDescriptor]
+      : []
+  );
+  const history = normalizeLocationHistory(input.locationHistory);
 
   const currentLocation = input.currentLocation
     ? {
@@ -78,7 +225,9 @@ function normalizeStudent(input = {}) {
         ? null
         : Number(input.year),
     phone: String(input.phone || "").trim(),
-    faceDescriptor: normalizeDescriptor(input.faceDescriptor),
+    faceDescriptor:
+      descriptorHistory[descriptorHistory.length - 1] || normalizeDescriptor(input.faceDescriptor),
+    faceDescriptors: descriptorHistory,
     status: ["online", "offline", "alert"].includes(input.status)
       ? input.status
       : "offline",
@@ -155,7 +304,10 @@ function exportStudents() {
 }
 
 function getStudent(studentId) {
-  const found = students.find((item) => item.studentId === studentId);
+  const key = String(studentId || "").trim();
+  const found = students.find(
+    (item) => item.studentId === key || String(item._id || "") === key
+  );
   return found ? clone(found) : null;
 }
 
@@ -165,10 +317,24 @@ function registerStudent(payload = {}) {
     throw new Error("studentId is required");
   }
 
-  const existing = students.find((item) => item.studentId === studentId);
+  let existing = students.find((item) => item.studentId === studentId);
+  if (!existing) {
+    existing = findStudentBySimilarName(payload.name);
+  }
+
   const now = new Date().toISOString();
 
   if (existing) {
+    if (existing.studentId !== studentId) {
+      const conflictingStudentId = students.find(
+        (item) => item !== existing && item.studentId === studentId
+      );
+
+      if (!conflictingStudentId) {
+        existing.studentId = studentId;
+      }
+    }
+
     existing.name = String(payload.name || existing.name || "Unknown").trim() || "Unknown";
     existing.program = String(payload.program || existing.program || "").trim();
     existing.year =
@@ -179,7 +345,9 @@ function registerStudent(payload = {}) {
 
     const descriptor = normalizeDescriptor(payload.faceDescriptor);
     if (descriptor.length > 0) {
-      existing.faceDescriptor = descriptor;
+      existing.faceDescriptors = mergeDescriptorHistory(existing.faceDescriptors, [descriptor]);
+      existing.faceDescriptor =
+        existing.faceDescriptors[existing.faceDescriptors.length - 1] || descriptor;
     }
 
     existing.updatedAt = now;
@@ -194,6 +362,7 @@ function registerStudent(payload = {}) {
     year: payload.year,
     phone: payload.phone,
     faceDescriptor: payload.faceDescriptor,
+    faceDescriptors: [payload.faceDescriptor],
     status: "offline",
     isOnCampus: false,
     currentLocation: null,
@@ -235,7 +404,10 @@ function updateStudent(studentId, patch = {}) {
 }
 
 function deleteStudent(studentId) {
-  const index = students.findIndex((item) => item.studentId === studentId);
+  const key = String(studentId || "").trim();
+  const index = students.findIndex(
+    (item) => item.studentId === key || String(item._id || "") === key
+  );
   if (index < 0) {
     return null;
   }
@@ -246,15 +418,20 @@ function deleteStudent(studentId) {
 }
 
 function updateLocation(studentId, payload = {}) {
-  const student = students.find((item) => item.studentId === studentId);
+  const key = String(studentId || "").trim();
+  const student = students.find(
+    (item) => item.studentId === key || String(item._id || "") === key
+  );
   if (!student) {
     return null;
   }
 
   const eventTime = safeDate(payload.timestamp);
+  const buildingId = String(payload.buildingId || payload.cameraId || "unknown-camera");
+  const buildingName = String(payload.buildingName || payload.cameraLabel || "Unknown Camera");
   const locationEntry = {
-    buildingId: String(payload.buildingId || "unknown-camera"),
-    buildingName: String(payload.buildingName || "Unknown Camera"),
+    buildingId,
+    buildingName,
     detectedBy: String(payload.detectedBy || "CAMERA"),
     timestamp: eventTime.toISOString(),
   };
@@ -267,7 +444,15 @@ function updateLocation(studentId, payload = {}) {
     detectedBy: locationEntry.detectedBy,
     lastSeen: eventTime.toISOString(),
   };
-  student.locationHistory = [...student.locationHistory, locationEntry].slice(-50);
+  if (!Array.isArray(student.locationHistory)) {
+    student.locationHistory = [];
+  }
+
+  student.locationHistory.unshift(locationEntry);
+  if (student.locationHistory.length > MAX_LOCATION_HISTORY) {
+    student.locationHistory.pop();
+  }
+
   student.updatedAt = new Date().toISOString();
 
   saveStore();
@@ -304,6 +489,17 @@ function importStudents(nextStudents) {
   return clone(students);
 }
 
+function remove(studentId) {
+  return deleteStudent(studentId);
+}
+
+function clearStudents() {
+  const removed = clone(students);
+  students = [];
+  saveStore();
+  return removed;
+}
+
 module.exports = {
   initializeStore,
   countStudents,
@@ -313,6 +509,8 @@ module.exports = {
   registerStudent,
   updateStudent,
   deleteStudent,
+  remove,
+  clearStudents,
   updateLocation,
   applyFaceDetection,
   importStudents,
