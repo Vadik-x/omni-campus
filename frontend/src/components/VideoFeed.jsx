@@ -18,7 +18,7 @@ export default function VideoFeed() {
   const [frame, setFrame] = useState("");
   const [meta, setMeta] = useState({
     connected: false,
-    mode: "mock",
+    mode: "fallback",
     timestamp: null,
   });
 
@@ -36,7 +36,7 @@ export default function VideoFeed() {
       setFrame(payload.frame);
       setMeta({
         connected: Boolean(payload.connected),
-        mode: payload.mode || "mock",
+        mode: payload.mode || "fallback",
         timestamp: payload.timestamp || null,
       });
     });
@@ -52,7 +52,7 @@ export default function VideoFeed() {
       <div className="video-head">
         <h3>Live Camera Feed</h3>
         <span className={`status-badge ${meta?.mode === "live" ? "online" : "offline"}`}>
-          {meta?.mode === "live" ? "Live" : "Mock"}
+          {meta?.mode === "live" ? "Live" : "Fallback"}
         </span>
       </div>
 
@@ -65,7 +65,7 @@ export default function VideoFeed() {
       </div>
 
       <p className="muted">
-        Source: {meta?.connected ? "System webcam (index 0)" : "Mock fallback"} | Updated: {formatTime(meta?.timestamp)}
+        Source: {meta?.connected ? "System webcam (index 0)" : "Fallback stream"} | Updated: {formatTime(meta?.timestamp)}
       </p>
     </section>
   );

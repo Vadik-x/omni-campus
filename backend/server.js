@@ -3,25 +3,23 @@ require("dotenv").config();
 const http = require("http");
 const express = require("express");
 const cors = require("cors");
-const mongoose = require("mongoose");
 const { Server } = require("socket.io");
 
 const createStudentsRouter = require("./routes/students");
 const createTrackingRouter = require("./routes/tracking");
-const createCameraRouter = require("./routes/camera");
-const seedStudents = require("./services/seed-on-start");
-const { startCameraStream } = require("./services/camera");
-const { startFusionLoop, stopFusionLoop } = require("./services/fusion");
-const { resetMockStore } = require("./services/mockStore");
+const cameraRoutes = require("./routes/camera");
+const studentStore = require("./services/studentStore");
 
 const app = express();
 const server = http.createServer(app);
 const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+const activeCameras = new Map();
+const camerasBySocket = new Map();
 
 const io = new Server(server, {
   cors: {
     origin: frontendUrl,
-    methods: ["GET", "POST", "PATCH"],
+    methods: ["GET", "POST", "PATCH", "DELETE"],
   },
 });
 
@@ -37,13 +35,14 @@ app.use(express.json({ limit: "10mb" }));
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
-    mode: mongoose.connection.readyState === 1 ? "database" : "mock",
+    mode: "file-store",
+    students: studentStore.countStudents(),
   });
 });
 
 app.use("/api/students", createStudentsRouter(io));
 app.use("/api/tracking", createTrackingRouter(io));
-app.use("/api/camera", createCameraRouter(io));
+app.use("/api/proxy", cameraRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
@@ -67,45 +66,214 @@ app.use((error, req, res, next) => {
   });
 });
 
+function getCameraList() {
+  return Array.from(activeCameras.values()).map((camera) => ({
+    cameraId: camera.cameraId,
+    cameraLabel: camera.cameraLabel,
+    source: camera.source,
+    timestamp: camera.timestamp,
+  }));
+}
+
+function broadcastCameraList() {
+  io.emit("cameras:list", getCameraList());
+}
+
+function parseEventTimestamp(value) {
+  const parsed = value ? new Date(value) : new Date();
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function clampConfidence(value) {
+  if (typeof value !== "number") {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(1, value));
+}
+
+function applyFaceDetection(payload) {
+  const eventTime = parseEventTimestamp(payload.timestamp);
+  return studentStore.applyFaceDetection({
+    studentId: payload.studentId,
+    studentName: payload.studentName,
+    cameraId: String(payload.cameraId || "unknown-camera"),
+    cameraLabel: String(payload.cameraLabel || "Unknown Camera"),
+    timestamp: eventTime,
+  });
+}
+
+function removeCamera(cameraId, socketId) {
+  if (!cameraId) {
+    return false;
+  }
+
+  const existing = activeCameras.get(cameraId);
+  if (!existing) {
+    return false;
+  }
+
+  if (socketId && existing.socketId !== socketId) {
+    return false;
+  }
+
+  activeCameras.delete(cameraId);
+
+  const owned = camerasBySocket.get(existing.socketId);
+  if (owned) {
+    owned.delete(cameraId);
+    if (owned.size === 0) {
+      camerasBySocket.delete(existing.socketId);
+    }
+  }
+
+  return true;
+}
+
 io.on("connection", (socket) => {
   console.log("Socket connected:", socket.id);
 
+  socket.emit("cameras:list", getCameraList());
+
+  socket.on("camera:register", (payload = {}) => {
+    const cameraId = String(payload.cameraId || "").trim();
+    const cameraLabel = String(payload.cameraLabel || "").trim();
+
+    if (!cameraId || !cameraLabel) {
+      return;
+    }
+
+    const camera = {
+      cameraId,
+      cameraLabel,
+      source: String(payload.source || "unknown"),
+      timestamp: new Date().toISOString(),
+      socketId: socket.id,
+    };
+
+    activeCameras.set(cameraId, camera);
+
+    if (!camerasBySocket.has(socket.id)) {
+      camerasBySocket.set(socket.id, new Set());
+    }
+    camerasBySocket.get(socket.id).add(cameraId);
+
+    broadcastCameraList();
+  });
+
+  socket.on("camera:disconnect", (payload = {}) => {
+    const cameraId = String(payload.cameraId || "").trim();
+    const removed = removeCamera(cameraId, socket.id);
+    if (removed) {
+      broadcastCameraList();
+    }
+  });
+
+  socket.on("student:register", (payload = {}) => {
+    try {
+      const student = studentStore.registerStudent(payload);
+      io.emit("student:update", student);
+    } catch (error) {
+      socket.emit("student:register:error", { message: error.message });
+    }
+  });
+
+  socket.on("face:detected", async (payload = {}) => {
+    const studentId = String(payload.studentId || "").trim();
+    if (!studentId) {
+      return;
+    }
+
+    const updated = applyFaceDetection({
+      studentId,
+      studentName: payload.studentName,
+      cameraId: payload.cameraId,
+      cameraLabel: payload.cameraLabel,
+      confidence: payload.confidence,
+      timestamp: payload.timestamp,
+    });
+
+    if (!updated) {
+      return;
+    }
+
+    const timestamp = parseEventTimestamp(payload.timestamp).toISOString();
+    const confidence = clampConfidence(payload.confidence);
+
+    io.emit("student:update", updated);
+    io.emit("detection:event", {
+      studentId: updated.studentId,
+      studentName: payload.studentName || updated.name,
+      cameraId: String(payload.cameraId || "unknown-camera"),
+      cameraLabel: String(payload.cameraLabel || "Unknown Camera"),
+      confidence,
+      timestamp,
+      method: "FACE-API",
+    });
+  });
+
   socket.on("disconnect", () => {
+    const owned = camerasBySocket.get(socket.id);
+    if (owned && owned.size > 0) {
+      Array.from(owned).forEach((cameraId) => {
+        removeCamera(cameraId, socket.id);
+      });
+      broadcastCameraList();
+    }
+
     console.log("Socket disconnected:", socket.id);
   });
 });
 
 async function start() {
-  const port = Number(process.env.PORT) || 5000;
+  studentStore.initializeStore();
 
-  let dbConnected = false;
-  if (process.env.MONGO_URI) {
+  const preferredPort = Number(process.env.PORT) || 5000;
+  const activePort = await startServerWithPortFallback(preferredPort);
+  console.log(`Omni-Campus backend running on port ${activePort} (file-store mode)`);
+}
+
+async function startServerWithPortFallback(initialPort) {
+  let port = initialPort;
+
+  while (port <= 65535) {
     try {
-      await mongoose.connect(process.env.MONGO_URI);
-      await seedStudents();
-      dbConnected = true;
-      console.log("Database connected");
+      await new Promise((resolve, reject) => {
+        const onError = (error) => {
+          server.off("listening", onListening);
+          reject(error);
+        };
+
+        const onListening = () => {
+          server.off("error", onError);
+          resolve();
+        };
+
+        server.once("error", onError);
+        server.once("listening", onListening);
+        server.listen(port);
+      });
+
+      return port;
     } catch (error) {
-      console.warn("Database unavailable. Starting in mock mode.");
-      resetMockStore();
+      if (error && error.code === "EADDRINUSE") {
+        console.warn(`Port ${port} in use, trying ${port + 1}...`);
+        port += 1;
+        continue;
+      }
+
+      throw error;
     }
-  } else {
-    console.warn("MONGO_URI missing. Starting in mock mode.");
-    resetMockStore();
   }
 
-  startCameraStream(io);
-  startFusionLoop(io);
-
-  server.listen(port, () => {
-    console.log(`Omni-Campus backend running on port ${port} (${dbConnected ? "database" : "mock"} mode)`);
-  });
+  throw new Error("No available port found");
 }
 
 async function gracefulShutdown() {
   try {
-    stopFusionLoop();
-    await mongoose.disconnect();
+    if (server.listening) {
+      await new Promise((resolve) => server.close(resolve));
+    }
   } catch (error) {
     console.error("Shutdown error:", error.message);
   } finally {

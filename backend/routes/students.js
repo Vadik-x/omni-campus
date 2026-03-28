@@ -1,132 +1,86 @@
 const express = require("express");
-const mongoose = require("mongoose");
-const Student = require("../models/Student");
-const mockStore = require("../services/mockStore");
-
-function buildSearchQuery({ q, name, studentId, program }) {
-  const query = {};
-
-  if (q) {
-    query.$or = [
-      { name: { $regex: q, $options: "i" } },
-      { studentId: { $regex: q, $options: "i" } },
-      { program: { $regex: q, $options: "i" } },
-    ];
-  }
-
-  if (name) {
-    query.name = { $regex: name, $options: "i" };
-  }
-
-  if (studentId) {
-    query.studentId = { $regex: studentId, $options: "i" };
-  }
-
-  if (program) {
-    query.program = { $regex: program, $options: "i" };
-  }
-
-  return query;
-}
+const studentStore = require("../services/studentStore");
 
 module.exports = function studentsRouter(io) {
   const router = express.Router();
-  const useMock = () => mongoose.connection.readyState !== 1;
 
-  router.get("/", async (req, res, next) => {
-    try {
-      const students = useMock()
-        ? mockStore.listStudents(req.query)
-        : await Student.find(buildSearchQuery(req.query)).sort({ name: 1 });
-      return res.json(students);
-    } catch (error) {
-      return next(error);
-    }
+  router.get("/", (req, res) => {
+    return res.json(studentStore.listStudents(req.query));
   });
 
-  router.get("/:id", async (req, res, next) => {
-    try {
-      const student = useMock()
-        ? mockStore.getStudent(req.params.id)
-        : await Student.findOne({ studentId: req.params.id });
-      if (!student) {
-        return res.status(404).json({ message: "Student not found" });
-      }
-
-      return res.json(student);
-    } catch (error) {
-      return next(error);
-    }
+  router.get("/export", (req, res) => {
+    return res.json(studentStore.exportStudents());
   });
 
-  router.post("/", async (req, res, next) => {
+  router.post("/", (req, res) => {
     try {
-      const created = useMock()
-        ? mockStore.createStudent(req.body)
-        : await Student.create(req.body);
-      return res.status(201).json(created);
-    } catch (error) {
-      if (error.code === 11000) {
-        return res.status(409).json({ message: "studentId already exists" });
-      }
+      const requestedId = String(req.body?.studentId || "").trim();
+      const existed = requestedId ? studentStore.getStudent(requestedId) : null;
 
-      return next(error);
-    }
-  });
-
-  router.patch("/:id/location", async (req, res, next) => {
-    try {
-      const { buildingId, buildingName, detectedBy, timestamp, status } = req.body;
-
-      if (!buildingId || !buildingName || !detectedBy) {
-        return res.status(400).json({
-          message:
-            "buildingId, buildingName and detectedBy are required for location update",
-        });
-      }
-
-      const eventTime = timestamp ? new Date(timestamp) : new Date();
-      const historyRecord = {
-        buildingId,
-        buildingName,
-        detectedBy,
-        timestamp: eventTime,
-      };
-
-      const student = useMock()
-        ? mockStore.updateLocation(req.params.id, {
-            ...historyRecord,
-            status: status || "online",
-          })
-        : await Student.findOneAndUpdate(
-            { studentId: req.params.id },
-            {
-              $set: {
-                currentLocation: {
-                  buildingId,
-                  buildingName,
-                  detectedBy,
-                  lastSeen: eventTime,
-                },
-                isOnCampus: true,
-                status: status || "online",
-              },
-              $push: {
-                locationHistory: historyRecord,
-              },
-            },
-            { new: true, runValidators: true }
-          );
-
-      if (!student) {
-        return res.status(404).json({ message: "Student not found" });
-      }
-
+      const student = studentStore.registerStudent(req.body || {});
       io.emit("student:update", student);
-      return res.json(student);
+
+      return res.status(existed ? 200 : 201).json(student);
     } catch (error) {
-      return next(error);
+      return res.status(400).json({ message: error.message });
     }
+  });
+
+  router.get("/:id", (req, res) => {
+    const student = studentStore.getStudent(req.params.id);
+    if (!student) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+
+    return res.json(student);
+  });
+
+  router.patch("/:id", (req, res) => {
+    const updated = studentStore.updateStudent(req.params.id, req.body || {});
+    if (!updated) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+
+    io.emit("student:update", updated);
+    return res.json(updated);
+  });
+
+  router.delete("/:id", (req, res) => {
+    const removed = studentStore.deleteStudent(req.params.id);
+    if (!removed) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+
+    return res.json({
+      message: "Student deleted",
+      student: removed,
+    });
+  });
+
+  router.patch("/:id/location", (req, res) => {
+    const { buildingId, buildingName, detectedBy, timestamp, status } = req.body || {};
+
+    if (!buildingId || !buildingName || !detectedBy) {
+      return res.status(400).json({
+        message:
+          "buildingId, buildingName and detectedBy are required for location update",
+      });
+    }
+
+    const student = studentStore.updateLocation(req.params.id, {
+      buildingId,
+      buildingName,
+      detectedBy,
+      timestamp,
+      status: status || "online",
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+
+    io.emit("student:update", student);
+    return res.json(student);
   });
 
   return router;

@@ -1,13 +1,10 @@
 const express = require("express");
-const mongoose = require("mongoose");
-const Student = require("../models/Student");
 const { parseCameraPayload } = require("../services/camera");
-const { mergeSignals, simulateDetection } = require("../services/fusion");
-const mockStore = require("../services/mockStore");
+const { mergeSignals } = require("../services/fusion");
+const studentStore = require("../services/studentStore");
 
 module.exports = function trackingRouter(io) {
   const router = express.Router();
-  const useMock = () => mongoose.connection.readyState !== 1;
 
   router.post("/detection", async (req, res, next) => {
     try {
@@ -28,35 +25,13 @@ module.exports = function trackingRouter(io) {
 
       const eventTime = merged.timestamp ? new Date(merged.timestamp) : new Date();
 
-      const updated = useMock()
-        ? mockStore.applyMergedDetection(studentId, {
-            ...merged,
-            timestamp: eventTime,
-          })
-        : await Student.findOneAndUpdate(
-            { studentId },
-            {
-              $set: {
-                currentLocation: {
-                  buildingId: merged.buildingId,
-                  buildingName: merged.buildingName,
-                  detectedBy: merged.detectedBy,
-                  lastSeen: eventTime,
-                },
-                isOnCampus: true,
-                status: "online",
-              },
-              $push: {
-                locationHistory: {
-                  buildingId: merged.buildingId,
-                  buildingName: merged.buildingName,
-                  detectedBy: merged.detectedBy,
-                  timestamp: eventTime,
-                },
-              },
-            },
-            { new: true, runValidators: true }
-          );
+      const updated = studentStore.updateLocation(studentId, {
+        buildingId: merged.buildingId,
+        buildingName: merged.buildingName,
+        detectedBy: merged.detectedBy,
+        timestamp: eventTime,
+        status: "online",
+      });
 
       if (!updated) {
         return res.status(404).json({ message: "Student not found" });
@@ -83,18 +58,19 @@ module.exports = function trackingRouter(io) {
         return res.status(400).json({ message: "studentId is required" });
       }
 
-      const updated = useMock()
-        ? mockStore.updateLocation(studentId, {
-            buildingId: (buildingName || process.env.CAMERA_ZONE || "Library - Block B")
-              .toLowerCase()
-              .replace(/[^a-z0-9]+/g, "-")
-              .replace(/^-+|-+$/g, ""),
-            buildingName: buildingName || process.env.CAMERA_ZONE || "Library - Block B",
-            detectedBy: "CAMERA",
-            timestamp: new Date(),
-            status: "online",
-          })
-        : await simulateDetection(studentId, buildingName);
+      const location = buildingName || process.env.CAMERA_ZONE || "Library - Block B";
+      const buildingId = location
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+
+      const updated = studentStore.updateLocation(studentId, {
+        buildingId,
+        buildingName: location,
+        detectedBy: "CAMERA",
+        timestamp: new Date(),
+        status: "online",
+      });
       if (!updated) {
         return res.status(404).json({ message: "Student not found" });
       }

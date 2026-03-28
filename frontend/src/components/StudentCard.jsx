@@ -15,11 +15,14 @@ function formatDateTime(input) {
   return new Date(input).toLocaleString();
 }
 
-export default function StudentCard({ student, selected, onSelect }) {
+export default function StudentCard({ student, selected, onSelect, cardRef }) {
   return (
     <button
       type="button"
       className={`student-card ${selected ? "selected" : ""}`}
+      id={`student-card-${student.studentId}`}
+      data-student-id={student.studentId}
+      ref={cardRef}
       onClick={() => onSelect(student.studentId)}
     >
       <div className="avatar">{getInitials(student.name)}</div>
