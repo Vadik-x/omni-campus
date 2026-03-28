@@ -154,9 +154,3 @@ Required GitHub Secrets:
 - Fusion loop runs every 5 seconds
 - Students not seen for over 10 minutes are marked offline
 - Blind spot fallback marks recent students as alert via WIFI-RF simulation
-
-## YouTube Demo
-
-Demo video placeholder:
-
-- https://www.youtube.com/watch?v=YOUR_DEMO_VIDEO_ID
