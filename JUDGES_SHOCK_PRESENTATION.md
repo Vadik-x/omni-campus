@@ -1,0 +1,91 @@
+# Omni-Campus
+## From Face to Verified Presence in Real Time
+### 3-minute judge presentation before live demo
+
+---
+
+## Slide 1: The Hook
+### "Attendance systems tell you who was present. We tell you who is present right now."
+
+- Omni-Campus is a real-time campus intelligence system.
+- It detects, verifies, and updates student presence live.
+- Multi-camera support: webcam, Android IP Webcam, and custom IP feeds.
+
+Speaker line:
+"In the next few minutes, we will show a system that does not just record attendance. It understands campus presence as it happens."
+
+---
+
+## Slide 2: The Real Problem
+### Static attendance is already outdated
+
+- Manual check-ins are slow and easy to spoof.
+- Traditional systems have no live movement context.
+- Operations teams cannot react to what they cannot see in real time.
+
+Speaker line:
+"The gap is not collecting data. The gap is trust, speed, and real-time decision capability."
+
+---
+
+## Slide 3: Our Breakthrough Architecture
+### Edge AI + Secure Backend Intelligence
+
+- Browser runs fast face detection and descriptor extraction.
+- Backend performs secure identity matching and temporal stability checks.
+- Live event engine broadcasts updates instantly to all dashboards.
+
+Core models used:
+- ssdMobilenetv1
+- tinyFaceDetector
+- faceLandmark68Net
+- faceRecognitionNet
+
+Speaker line:
+"This hybrid design gives us low latency from edge processing and high reliability from backend verification."
+
+---
+
+## Slide 4: Why This Is Hard to Build (and why we win)
+### Not just detection. Decision quality.
+
+- Descriptor matching with strict threshold logic.
+- ANN-assisted candidate prefilter for scalable matching.
+- Temporal stability model avoids false switches and flicker.
+- Signed payload verification + RBAC + encrypted descriptors.
+- Full audit trail and operational metrics.
+- End-to-end performance target: p95 around 350 ms (stretch up to 450 ms in early deployments).
+
+Speaker line:
+"Many teams can detect a face. Very few can make trustworthy real-time identity decisions under noisy camera conditions."
+
+---
+
+## Slide 5: Judge Wow Moments in the Live Demo
+### Watch these 5 things
+
+1. New student registration and immediate system readiness.
+2. Recognition across different camera types.
+3. Real-time dashboard and map updates without refresh.
+4. Stable identity lock without rapid false toggles.
+5. Auditability and health telemetry visible on demand.
+
+Speaker line:
+"Please pay attention to stability and trust controls, not only visual detection boxes. That is where enterprise value lives."
+
+---
+
+## Slide 6: Closing Punch
+### "Omni-Campus is not a face scanner. It is a real-time campus decision engine."
+
+- Built full-stack with production-hardening layers.
+- Ready for pilots with SQLite-first architecture and clear scale path.
+- Designed for secure, auditable, low-latency campus operations.
+
+Final line:
+"Now we will prove it live."
+
+---
+
+## Optional 20-second backup close (if judges interrupt)
+"Omni-Campus combines edge AI speed, backend decision reliability, and security-grade auditability to deliver live, trustworthy campus presence intelligence."

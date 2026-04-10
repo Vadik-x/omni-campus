@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { io } from "socket.io-client";
+import { getAuthHeaders, getSocketAuthPayload } from "../lib/securityHeaders";
 
 const API_BASE =
   import.meta.env.VITE_BACKEND_URL ||
@@ -80,6 +81,7 @@ export default function useSocket() {
   const [cameras, setCameras] = useState([]);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState("");
+  const [hasFetchedOnce, setHasFetchedOnce] = useState(false);
   const socketRef = useRef(null);
   const lastFeedEntryRef = useRef(new Map());
 
@@ -163,12 +165,16 @@ export default function useSocket() {
 
   const fetchStudents = useCallback(async () => {
     try {
-      const response = await axios.get(`${API_BASE}/api/students`);
+      const response = await axios.get(`${API_BASE}/api/students`, {
+        headers: getAuthHeaders(),
+      });
       setStudents(response.data || []);
       setError("");
     } catch (error) {
       console.error("Failed to fetch students:", error.message);
       setError(`Cannot load students from ${API_BASE}`);
+    } finally {
+      setHasFetchedOnce(true);
     }
   }, []);
 
@@ -179,7 +185,9 @@ export default function useSocket() {
         throw new Error("Student ID is required");
       }
 
-      const response = await axios.delete(`${API_BASE}/api/students/${encodeURIComponent(key)}`);
+      const response = await axios.delete(`${API_BASE}/api/students/${encodeURIComponent(key)}`, {
+        headers: getAuthHeaders(),
+      });
       removeStudentLocally(key);
       return response.data?.student || null;
     },
@@ -192,6 +200,7 @@ export default function useSocket() {
     const socket = io(API_BASE, {
       transports: ["websocket"],
       reconnection: true,
+      auth: getSocketAuthPayload(),
     });
 
     socketRef.current = socket;
@@ -245,6 +254,7 @@ export default function useSocket() {
     cameras,
     connected,
     error,
+    isBootstrapping: !hasFetchedOnce,
     emitEvent,
     addLocalEvent,
     deleteStudent,

@@ -8,9 +8,10 @@
     "start": "node server.js",
     "dev": "node server.js",
     "smoke": "node scripts/smoke-test.js",
-    "test": "node -e \"console.log('No backend tests configured yet')\""
+    "test": "node -e \"process.stdout.write('No backend tests configured yet\\n')\""
   },
   "dependencies": {
+    "better-sqlite3": "^11.10.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",

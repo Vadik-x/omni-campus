@@ -1,3 +1,5 @@
+const logger = require("../services/logger");
+
 const DEFAULT_BASES = [
   "http://localhost:5000",
   "http://localhost:5001",
@@ -6,6 +8,23 @@ const DEFAULT_BASES = [
   "http://localhost:5004",
   "http://localhost:5005",
 ];
+
+const SMOKE_ROLE = process.env.SMOKE_ROLE || "admin";
+const SMOKE_USER = process.env.SMOKE_USER || "smoke-runner";
+const SMOKE_API_KEY = process.env.SMOKE_API_KEY || "";
+
+function buildAuthHeaders() {
+  const headers = {
+    "x-omni-role": SMOKE_ROLE,
+    "x-omni-user": SMOKE_USER,
+  };
+
+  if (SMOKE_API_KEY) {
+    headers["x-omni-api-key"] = SMOKE_API_KEY;
+  }
+
+  return headers;
+}
 
 function fail(message, details) {
   const error = new Error(message);
@@ -24,6 +43,7 @@ async function requestJson(baseUrl, path, options = {}) {
     ...options,
     headers: {
       "content-type": "application/json",
+      ...buildAuthHeaders(),
       ...(options.headers || {}),
     },
   });
@@ -45,7 +65,11 @@ async function detectBaseUrl() {
   for (const baseUrl of candidates) {
     try {
       const health = await requestJson(baseUrl, "/health", { method: "GET" });
-      if (health && health.status === "ok" && health.mode === "file-store") {
+      if (
+        health
+        && health.status === "ok"
+        && ["file-store", "sqlite"].includes(String(health.mode || ""))
+      ) {
         return { baseUrl, health };
       }
     } catch (error) {
@@ -54,7 +78,7 @@ async function detectBaseUrl() {
   }
 
   fail(
-    "No file-store backend found. Start this backend first (npm start) or set SMOKE_BASE_URL."
+    "No backend found. Start this backend first (npm start) or set SMOKE_BASE_URL."
   );
 }
 
@@ -62,8 +86,15 @@ async function run() {
   const { baseUrl, health } = await detectBaseUrl();
   const studentsBase = `${baseUrl}/api/students`;
 
-  console.log(`[smoke] Using backend ${baseUrl}`);
-  console.log(`[smoke] Health mode=${health.mode} students=${health.students}`);
+  logger.info({
+    service: "api",
+    event: "smoke.start",
+    message: `Using backend ${baseUrl}`,
+    details: {
+      mode: health.mode,
+      students: health.students,
+    },
+  });
 
   const post = (path, body) =>
     requestJson(baseUrl, path, {
@@ -159,13 +190,20 @@ async function run() {
     fail("Final health check failed", finalHealth);
   }
 
-  console.log("[smoke] PASS: CRUD, location, import/export, and reset checks succeeded.");
+  logger.info({
+    service: "api",
+    event: "smoke.pass",
+    message: "PASS: CRUD, location, import/export, and reset checks succeeded",
+  });
 }
 
 run().catch((error) => {
-  console.error("[smoke] FAIL:", error.message);
-  if (error.details !== undefined) {
-    console.error(JSON.stringify(error.details, null, 2));
-  }
+  logger.error({
+    service: "api",
+    event: "smoke.fail",
+    message: `FAIL: ${error.message}`,
+    error,
+    details: error.details,
+  });
   process.exit(1);
 });

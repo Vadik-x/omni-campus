@@ -1,0 +1,165 @@
+Omni-Campus Recognition Roadmap (SQLite-First)
+Last updated: 2026-04-10
+
+Current Status
+- Phase 1: Completed
+- Phase 2: Implemented in code (2026-04-09), pending live soak verification
+- Phase 3: Implemented in code (2026-04-09), ready for exhibition demo
+- Phase 4: Implemented in code (2026-04-10), security controls active
+- Phase 5: Implemented in code (2026-04-10), production hardening active
+- Storage used: SQLite (better-sqlite3), not Postgres
+- Backend recognition endpoints live:
+  - POST /api/recognition/enroll
+  - POST /api/recognition/match
+  - GET /api/recognition/metrics
+- Frontend is wired to backend recognition APIs and metrics panel.
+
+Important update vs original plan
+- Keep SQLite in early production/staging.
+- Defer Postgres migration until scale triggers.
+- Build an interface layer now so DB swap is low-risk later.
+
+Scale triggers to move from SQLite to Postgres
+- More than 50,000 recognition events per day
+- More than 10 concurrent camera streams with sustained writes
+- Need multi-instance backend writes
+- Need advanced analytics joins/reporting at scale
+
+Phase 2 (Weeks 3-5): Realtime Recognition Core
+Goals
+- Move from request-per-detection to stream/worker pipeline.
+- Stabilize identity decisions and reduce duplicate/unstable emits.
+
+Tasks
+[x] Add inference worker boundary (process/service abstraction)
+[x] Add tracking-first pipeline (detect every N frames, track every frame)
+[x] Add temporal smoothing (2-3 frame confirmation + cooldown)
+[x] Add per-camera queue/backpressure and dropped-frame metrics
+[x] Add p95 latency dashboard (ingest to detect to match to emit)
+
+Implemented components
+- backend/services/inferenceWorker.js
+- backend/services/recognitionPipeline.js
+- backend/routes/recognition.js updated to pipeline-backed /match
+- frontend/src/components/CameraFeed.jsx sends track and stage timing payloads
+- frontend/src/components/RecognitionMetricsPanel.jsx shows stage p95 and queue/backpressure metrics
+
+Exit criteria
+- p95 end-to-end latency less than or equal to 450 ms
+- Duplicate event rate reduced by at least 60%
+- No API loop blocking under camera burst load
+
+Validation executed
+- Backend syntax check: pass
+- Frontend production build: pass
+- File diagnostics on touched backend/frontend files: pass
+
+Phase 3 (Weeks 6-8): Scale and Accuracy
+Tasks
+[x] Introduce ANN index abstraction (coarse-centroid ANN service; exact mode fallback)
+[x] Add enrollment quality gates (brightness, contrast, sharpness, detection score, pose checks)
+[x] Tune multi-template identities (best-per-student template aggregation with template-count confidence tuning)
+[x] Add camera-specific threshold profiles
+
+Implemented components
+- backend/services/annIndex.js
+- backend/services/cameraThresholds.js
+- backend/services/recognition.js enhanced for ANN + quality gates + search-space metrics
+- backend/services/recognitionPipeline.js uses camera profile threshold resolution
+- backend/routes/recognition.js includes camera profile APIs
+- frontend/src/components/FaceRegister.jsx sends quality metadata during enroll
+- frontend/src/components/RecognitionMetricsPanel.jsx exposes Phase 3 KPIs
+
+Exit criteria
+- False accepts and false rejects both trend down week-over-week
+- Match latency remains stable under peak load
+
+Phase 4 (Weeks 9-10): Security and Anti-Spoof
+Tasks
+[x] Add passive liveness checks for high-risk cameras
+[x] Encrypt sensitive embeddings/descriptor blobs at rest
+[x] Add RBAC for enroll/delete/reindex operations
+[x] Sign detection payloads and keep full audit logs
+
+Implemented components
+- backend/services/passiveLiveness.js
+- backend/services/descriptorCrypto.js
+- backend/services/security.js
+- backend/services/auditLog.js
+- backend/services/recognitionPipeline.js liveness gating and metrics
+- backend/routes/recognition.js RBAC, signature verification, security audit endpoints
+- backend/routes/students.js RBAC for mutation/delete operations + audit logging
+- backend/routes/tracking.js signed detection ingest + RBAC + audit
+- backend/server.js socket payload signature checks and audit trail
+- frontend/src/lib/securityHeaders.js signed payload/header utility
+- frontend detection and registration flows send signed/authenticated payload headers
+
+Exit criteria
+- Security review completed in code-level implementation pass
+- Critical operations fully auditable via backend/data/audit-log.jsonl and /api/recognition/audit-logs
+
+Phase 5 (Weeks 11-12): Production Hardening
+Tasks
+[x] Add structured JSON logging for API/camera/recognition services
+[x] Add in-memory circular runtime metrics buffer (last 100 events)
+[x] Add local alert system for latency, confidence, stale detections, and camera inactivity
+[x] Add /api/health, /api/alerts, and /api/stats observability endpoints
+[x] Add timeout + fallback behavior for recognition pipeline operations
+[x] Add in-memory audit visibility buffer (last 50 actions)
+[x] Add DEBUG mode for verbose local diagnostics
+
+Implemented components
+- backend/services/logger.js
+- backend/services/runtimeMetrics.js
+- backend/services/runtimeAlerts.js
+- backend/services/runtimeStats.js
+- backend/services/recognitionPipeline.js timeout/fallback + metrics/alerts integration
+- backend/server.js /api/health + /api/alerts + /api/stats + background alert checks
+- backend/services/auditLog.js in-memory audit buffer and important-action logging
+
+Exit criteria
+- Backend remains observable and debuggable over long local runtime
+- Failures emit structured ERROR logs and fallback responses instead of silent crashes
+- Operators can inspect health, recent alerts, metrics, and stats without external tools
+
+SLO Targets (Instant Feel)
+- Face appears to lock: less than or equal to 150 ms
+- Lock to identity match: less than or equal to 120 ms
+- Match to UI/socket emit: less than or equal to 80 ms
+- End-to-end p95 target: less than or equal to 350 ms (stretch), less than or equal to 450 ms (acceptable early)
+
+Notes
+- Phase 1 is valid with SQLite and is not a blocker for Phase 2.
+- Phase 2 code path is now active on /api/recognition/match.
+- Postgres is a Phase 3/4 migration unless scale triggers are hit early.
+
+Recognition Stability Validation (2026-04-10)
+- Live switch test executed with deterministic A->B and anti-switch oscillation sequences.
+- Validation script: backend/scripts/stability-switch-test.js
+- Sequence results:
+  - A A A A -> confirmed A
+  - wait lock -> B B B B -> identity_switched emitted and stableId moved to B
+  - A A A A -> confirmed A
+  - wait lock -> B A B A -> no switch (stableId remained A)
+- Structured log evidence observed in live backend output:
+  - identity_confirmed
+  - stability_locked
+  - identity_switched
+
+New stability hardening controls (2026-04-10)
+- Adaptive confirmation threshold based on pipeline latency:
+  - RECOGNITION_STABILITY_ADAPTIVE_LATENCY_MS
+  - RECOGNITION_STABILITY_ADAPTIVE_THRESHOLD_BOOST
+- Stable confidence decay to prevent stale lock-in:
+  - RECOGNITION_STABILITY_CONFIDENCE_DECAY
+  - RECOGNITION_STABILITY_CONFIDENCE_MIN
+
+Elite upgrades completed (2026-04-10)
+- Multi-face per-camera stability state (top 2 tracked identities)
+  - Stability engine now maintains per-camera track states and surfaces top-2 stable identities.
+  - Pipeline responses now include `stableIdentities`, `pipeline.stability.activeTrackCount`, and resolved `trackId`.
+  - Live validation: same-camera dual-track sequence (left/right hints) reached activeTrackCount=2 and exposed both identities simultaneously.
+- Lightweight UI state contract (Detecting, Locked, Switching)
+  - Backend now emits `uiState` phase contract (`detecting`, `locked`, `switching`, plus stable/lost fallbacks).
+  - Camera feed UI consumes contract phase directly for status labels/colors.
+  - Live validation: switch sequence emitted detecting->locked->switching->locked; anti-switch sequence emitted switching without incorrect identity flip.

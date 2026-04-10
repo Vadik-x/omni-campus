@@ -15,7 +15,24 @@ function formatDateTime(input) {
   return new Date(input).toLocaleString();
 }
 
-export default function StudentCard({ student, selected, onSelect, cardRef, onDelete }) {
+export default function StudentCard({
+  student,
+  selected,
+  onSelect,
+  cardRef,
+  onDelete,
+  onOpenDetail,
+}) {
+  const handleSelect = () => {
+    if (typeof onSelect === "function") {
+      onSelect(student.studentId);
+    }
+
+    if (typeof onOpenDetail === "function") {
+      onOpenDetail(student);
+    }
+  };
+
   return (
     <article
       className={`student-card-shell ${selected ? "selected" : ""}`}
@@ -26,7 +43,7 @@ export default function StudentCard({ student, selected, onSelect, cardRef, onDe
       <button
         type="button"
         className={`student-card ${selected ? "selected" : ""}`}
-        onClick={() => onSelect(student.studentId)}
+        onClick={handleSelect}
       >
         <div className="avatar">{getInitials(student.name)}</div>
         <div className="student-info">
@@ -42,6 +59,7 @@ export default function StudentCard({ student, selected, onSelect, cardRef, onDe
             {student.currentLocation?.buildingName || "Unknown"} | Last seen:{" "}
             {formatDateTime(student.currentLocation?.lastSeen)}
           </p>
+          <p className="student-profile-link">Open detailed profile</p>
         </div>
       </button>
 

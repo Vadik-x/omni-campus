@@ -3,17 +3,34 @@ import * as faceapi from "@vladmandic/face-api";
 const MODEL_URI = "/models";
 const STORAGE_KEY = "omni_face_registry";
 
-const MATCH_THRESHOLD = 0.55;
+const STRICT_DISTANCE_THRESHOLD = Number(import.meta.env.VITE_FACE_MATCH_THRESHOLD || 0.45);
+const MATCH_THRESHOLD = Number.isFinite(STRICT_DISTANCE_THRESHOLD)
+  ? clamp(STRICT_DISTANCE_THRESHOLD, 0.25, 0.65)
+  : 0.45;
 const DEFAULT_UPSCALE_FACTOR = 2;
 const SSD_MIN_CONFIDENCE = 0.3;
 const SSD_MAX_RESULTS = 10;
 const TINY_FALLBACK_INPUT_SIZE = 416;
 const TINY_FALLBACK_SCORE_THRESHOLD = 0.2;
+const REALTIME_TINY_INPUT_SIZE = 320;
+const REALTIME_TINY_SCORE_THRESHOLD = 0.12;
+const REALTIME_SSD_MIN_CONFIDENCE = 0.22;
 
-const TRACK_CONFIRMATION_FRAMES = 2;
-const TRACK_IOU_THRESHOLD = 0.5;
-const TRACK_MAX_AGE_MS = 800;
-const TRACK_PERSIST_NO_FACE_MS = 800;
+const TRACK_CONFIRMATION_FRAMES = Math.max(
+  2,
+  Number(import.meta.env.VITE_FACE_CONFIRMATION_FRAMES || 2)
+);
+const TRACK_IOU_THRESHOLD = 0.35;
+const TRACK_MAX_AGE_MS = 2500;
+const TRACK_PERSIST_NO_FACE_MS = Math.max(
+  400,
+  Number(import.meta.env.VITE_TRACK_PERSIST_NO_FACE_MS || 1000)
+);
+const TEMPORAL_PERSIST_MAX_DESCRIPTOR_DRIFT = Number.isFinite(
+  Number(import.meta.env.VITE_TEMPORAL_DESCRIPTOR_DRIFT || 0.16)
+)
+  ? clamp(Number(import.meta.env.VITE_TEMPORAL_DESCRIPTOR_DRIFT || 0.16), 0.08, 0.35)
+  : 0.16;
 
 const REGISTRATION_CAPTURE_DELAY_MS = 500;
 const DEFAULT_REGISTRATION_STEPS = [
@@ -134,15 +151,15 @@ function resolveUiPresentation(displayState, name, confidence) {
 
   if (displayState === "temporal") {
     return {
-      displayLabel: `${name} ~`,
-      boxColor: "#00ff88",
+      displayLabel: "Rechecking identity...",
+      boxColor: "#38bdf8",
       boxDashed: true,
       statusType: "temporal",
     };
   }
 
   return {
-    displayLabel: "Unknown",
+    displayLabel: "Unregistered",
     boxColor: "#ffd447",
     boxDashed: false,
     statusType: "unknown",
@@ -156,9 +173,57 @@ class FaceEngine {
     this.loadingPromise = null;
     this.rehydrated = false;
     this.threshold = MATCH_THRESHOLD;
+    this.faceMatcher = null;
+    this.faceMatcherVersion = "";
 
     this.trackCounter = 0;
     this.trackingState = new Map();
+  }
+
+  invalidateFaceMatcher() {
+    this.faceMatcher = null;
+    this.faceMatcherVersion = "";
+  }
+
+  computeFaceMatcherVersion() {
+    return Array.from(this.faceDatabase.entries())
+      .map(([personId, person]) => {
+        const count = Array.isArray(person?.descriptors) ? person.descriptors.length : 0;
+        return `${personId}:${count}`;
+      })
+      .sort()
+      .join("|");
+  }
+
+  getOrCreateFaceMatcher() {
+    const version = this.computeFaceMatcherVersion();
+    if (this.faceMatcher && this.faceMatcherVersion === version) {
+      return this.faceMatcher;
+    }
+
+    const labeledDescriptors = Array.from(this.faceDatabase.entries())
+      .map(([personId, person]) => {
+        const descriptors = (Array.isArray(person?.descriptors) ? person.descriptors : [])
+          .map((entry) => asFloat32Array(entry))
+          .filter((entry) => entry && entry.length > 0);
+
+        if (descriptors.length === 0) {
+          return null;
+        }
+
+        return new faceapi.LabeledFaceDescriptors(personId, descriptors);
+      })
+      .filter(Boolean);
+
+    if (labeledDescriptors.length === 0) {
+      this.invalidateFaceMatcher();
+      return null;
+    }
+
+    // Strict FaceMatcher threshold to reduce false positives.
+    this.faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, this.threshold);
+    this.faceMatcherVersion = version;
+    return this.faceMatcher;
   }
 
   persistToStorage() {
@@ -291,6 +356,8 @@ class FaceEngine {
         });
         hydratedCount += 1;
       });
+
+      this.invalidateFaceMatcher();
     } catch (error) {
       hydratedCount = 0;
     }
@@ -324,6 +391,7 @@ class FaceEngine {
     const key = normalizePersonId(personId);
     const removed = this.faceDatabase.delete(key);
     if (removed) {
+      this.invalidateFaceMatcher();
       this.persistToStorage();
     }
     return removed;
@@ -336,6 +404,7 @@ class FaceEngine {
   clearAllPeople() {
     this.faceDatabase.clear();
     this.trackingState.clear();
+    this.invalidateFaceMatcher();
     this.persistToStorage();
   }
 
@@ -353,6 +422,7 @@ class FaceEngine {
       name: normalizeName(name),
       descriptors,
     });
+    this.invalidateFaceMatcher();
     this.persistToStorage();
 
     return {
@@ -517,6 +587,7 @@ class FaceEngine {
       // Keep all captures for better distance/angle invariance.
       descriptors: capturedDescriptors,
     });
+    this.invalidateFaceMatcher();
     this.persistToStorage();
 
     return {
@@ -535,53 +606,41 @@ class FaceEngine {
       return null;
     }
 
-    let globalBestDistance = Number.POSITIVE_INFINITY;
-    let bestMatch = null;
-
-    for (const [personId, person] of this.faceDatabase.entries()) {
-      const knownDescriptors = Array.isArray(person.descriptors) ? person.descriptors : [];
-      let personBestDistance = Number.POSITIVE_INFINITY;
-
-      for (const storedDescriptorInput of knownDescriptors) {
-        const storedDescriptor = asFloat32Array(storedDescriptorInput);
-        if (!(storedDescriptor instanceof Float32Array) || storedDescriptor.length === 0) {
-          continue;
-        }
-
-        const distance = faceapi.euclideanDistance(query, storedDescriptor);
-        if (distance < personBestDistance) {
-          personBestDistance = distance;
-        }
-      }
-
-      if (personBestDistance < globalBestDistance) {
-        globalBestDistance = personBestDistance;
-        bestMatch = {
-          personId,
-          name: person.name,
-        };
-      }
-    }
-
-    if (!bestMatch) {
+    const matcher = this.getOrCreateFaceMatcher();
+    if (!matcher) {
       return null;
     }
 
-    if (globalBestDistance < this.threshold) {
-      return {
-        personId: bestMatch.personId,
-        name: bestMatch.name,
-        confidence: Number(clamp(1 - globalBestDistance, 0, 1).toFixed(3)),
-        distance: Number(globalBestDistance.toFixed(4)),
-      };
+    const match = matcher.findBestMatch(query);
+    if (!match || String(match.label || "").toLowerCase() === "unknown") {
+      return null;
     }
 
-    return null;
+    const personId = normalizePersonId(match.label);
+    const person = this.faceDatabase.get(personId);
+    if (!person) {
+      return null;
+    }
+
+    const distance = Number(match.distance);
+    if (!Number.isFinite(distance) || distance > this.threshold) {
+      return null;
+    }
+
+    return {
+      personId,
+      name: normalizeName(person.name),
+      // Keep strict distance thresholding, but use stable confidence mapping for emit gates.
+      confidence: Number(clamp(1 - distance / 1.2, 0, 1).toFixed(3)),
+      distance: Number(distance.toFixed(4)),
+      threshold: Number(this.threshold.toFixed(3)),
+    };
   }
 
   prepareDetectionSource(videoElement, options = {}) {
     const requestedUpscale = Number(options.upscaleFactor);
-    const upscaleFactor = requestedUpscale > 1 ? requestedUpscale : DEFAULT_UPSCALE_FACTOR;
+    const hasExplicitUpscale = Number.isFinite(requestedUpscale) && requestedUpscale > 0;
+    const upscaleFactor = hasExplicitUpscale ? requestedUpscale : DEFAULT_UPSCALE_FACTOR;
 
     if (typeof document === "undefined" || upscaleFactor <= 1) {
       return {
@@ -609,18 +668,60 @@ class FaceEngine {
     };
   }
 
-  async detectFacesWithFallback(sourceElement) {
-    const primaryDetections = await faceapi
+  async detectFacesWithFallback(sourceElement, options = {}) {
+    const realtime = Boolean(options.realtime);
+    const tinyInputSize = Number(options.inputSize) > 0
+      ? Number(options.inputSize)
+      : (realtime ? REALTIME_TINY_INPUT_SIZE : TINY_FALLBACK_INPUT_SIZE);
+    const tinyScoreThreshold = Number.isFinite(Number(options.scoreThreshold))
+      ? Number(options.scoreThreshold)
+      : (realtime ? REALTIME_TINY_SCORE_THRESHOLD : TINY_FALLBACK_SCORE_THRESHOLD);
+    const ssdMinConfidence = Number.isFinite(Number(options.minConfidence))
+      ? Number(options.minConfidence)
+      : (realtime ? REALTIME_SSD_MIN_CONFIDENCE : SSD_MIN_CONFIDENCE);
+    const ssdMaxResults = Number(options.maxResults) > 0
+      ? Number(options.maxResults)
+      : SSD_MAX_RESULTS;
+
+    const detectWithTiny = async () => faceapi
       .detectAllFaces(
         sourceElement,
-        new faceapi.SsdMobilenetv1Options({
-          minConfidence: SSD_MIN_CONFIDENCE,
-          maxResults: SSD_MAX_RESULTS,
+        new faceapi.TinyFaceDetectorOptions({
+          inputSize: tinyInputSize,
+          scoreThreshold: tinyScoreThreshold,
         })
       )
       .withFaceLandmarks()
       .withFaceDescriptors();
 
+    const detectWithSsd = async () => faceapi
+      .detectAllFaces(
+        sourceElement,
+        new faceapi.SsdMobilenetv1Options({
+          minConfidence: ssdMinConfidence,
+          maxResults: ssdMaxResults,
+        })
+      )
+      .withFaceLandmarks()
+      .withFaceDescriptors();
+
+    if (realtime) {
+      const tinyDetections = await detectWithTiny();
+      if (tinyDetections.length > 0) {
+        return {
+          detections: tinyDetections,
+          detector: "tiny",
+        };
+      }
+
+      const ssdDetections = await detectWithSsd();
+      return {
+        detections: ssdDetections,
+        detector: ssdDetections.length > 0 ? "ssd" : "none",
+      };
+    }
+
+    const primaryDetections = await detectWithSsd();
     if (primaryDetections.length > 0) {
       return {
         detections: primaryDetections,
@@ -628,17 +729,7 @@ class FaceEngine {
       };
     }
 
-    const fallbackDetections = await faceapi
-      .detectAllFaces(
-        sourceElement,
-        new faceapi.TinyFaceDetectorOptions({
-          inputSize: TINY_FALLBACK_INPUT_SIZE,
-          scoreThreshold: TINY_FALLBACK_SCORE_THRESHOLD,
-        })
-      )
-      .withFaceLandmarks()
-      .withFaceDescriptors();
-
+    const fallbackDetections = await detectWithTiny();
     return {
       detections: fallbackDetections,
       detector: fallbackDetections.length > 0 ? "tiny" : "none",
@@ -729,7 +820,7 @@ class FaceEngine {
     const now = Date.now();
     const { targetElement, scaleBack } = this.prepareDetectionSource(videoElement, options);
 
-    const { detections, detector } = await this.detectFacesWithFallback(targetElement);
+    const { detections, detector } = await this.detectFacesWithFallback(targetElement, options);
 
     const activeTracks = Array.from(this.trackingState.values()).filter(
       (track) => now - Number(track?.lastSeenAt || 0) <= TRACK_MAX_AGE_MS
@@ -787,13 +878,24 @@ class FaceEngine {
         }
       } else if (previousTrack?.personId && previousTrack?.isConfirmed) {
         const ageMs = now - Number(previousTrack.lastSeenAt || 0);
-        if (ageMs <= TRACK_PERSIST_NO_FACE_MS) {
+        const previousDescriptor = asFloat32Array(previousTrack?.lastFaceDescriptor);
+        const descriptorDrift =
+          descriptorFloat && previousDescriptor
+            ? faceapi.euclideanDistance(descriptorFloat, previousDescriptor)
+            : Number.POSITIVE_INFINITY;
+        const canPersistTemporal =
+          ageMs <= TRACK_PERSIST_NO_FACE_MS
+          && Number.isFinite(descriptorDrift)
+          && descriptorDrift <= TEMPORAL_PERSIST_MAX_DESCRIPTOR_DRIFT;
+
+        if (canPersistTemporal) {
           personId = previousTrack.personId;
           name = previousTrack.name;
           confidence = clamp(Number(previousTrack.confidence || 0.55) * 0.96, 0.45, 0.99);
           displayState = "temporal";
           consecutiveFrames = Number(previousTrack.consecutiveFrames || TRACK_CONFIRMATION_FRAMES);
           isConfirmed = true;
+          distance = Number(descriptorDrift.toFixed(4));
         }
       }
 
@@ -816,7 +918,7 @@ class FaceEngine {
       nextTrackingState.set(trackId, updatedTrack);
 
       if (faceMatch && !isConfirmed) {
-        return;
+        displayState = "temporal";
       }
 
       outputs.push(

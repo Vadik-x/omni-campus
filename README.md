@@ -12,7 +12,8 @@ Omni-Campus is a real-time campus monitoring dashboard for student presence and 
 - Camera management (webcam, IP camera, DroidCam, custom URL)
 - Socket-based live updates for detections and student lifecycle changes
 - Persistent map center and camera positions in local storage
-- Backend file-store persistence (JSON data file)
+- Backend SQLite persistence with encrypted descriptor blobs
+- Structured JSON runtime logs, in-memory alerts, and local health/stats endpoints
 - Bulk cleanup support (`Clear All Data` in registry + backend `DELETE /api/students`)
 
 ## Tech Stack
@@ -20,7 +21,7 @@ Omni-Campus is a real-time campus monitoring dashboard for student presence and 
 - Frontend: React, Vite, React Router, React Leaflet, Socket.IO Client, Axios
 - Backend: Node.js, Express, Socket.IO, dotenv
 - Recognition: `@vladmandic/face-api` on frontend
-- Storage: backend JSON file (`backend/data/students.json`) + browser localStorage
+- Storage: backend SQLite (`backend/data/omni-campus.db`) + browser localStorage cache
 
 ## Repository Structure
 
@@ -30,7 +31,8 @@ Omni-Campus is a real-time campus monitoring dashboard for student presence and 
 |- backend/                   # Express + Socket.IO API and services
 |  |- routes/                 # students, tracking, proxy camera routes
 |  |- services/               # camera, fusion, student store
-|  |- data/students.json      # persisted student records (created at runtime)
+|  |- data/omni-campus.db     # persisted student/recognition records
+|  |- data/audit-log.jsonl    # append-only security audit trail
 |- .github/workflows/         # CI/CD workflow
 |- .env.example               # environment variable template
 ```
@@ -143,6 +145,9 @@ node --check server.js
 ### Health
 
 - `GET /health`
+- `GET /api/health`
+- `GET /api/alerts`
+- `GET /api/stats`
 
 ### Students
 
@@ -159,6 +164,18 @@ node --check server.js
 
 - `POST /api/tracking/detection`
 - `POST /api/tracking/simulate`
+
+### Recognition
+
+- `GET /api/recognition/health`
+- `GET /api/recognition/metrics`
+- `GET /api/recognition/camera-profiles`
+- `PUT /api/recognition/camera-profiles/:cameraId`
+- `POST /api/recognition/enroll`
+- `POST /api/recognition/reindex`
+- `POST /api/recognition/match`
+- `POST /api/recognition/match/direct`
+- `GET /api/recognition/audit-logs`
 
 ### Camera Proxy
 
@@ -234,6 +251,37 @@ CI/CD workflow is in `.github/workflows/deploy.yml` and runs on push to `main`.
 - Do not commit `.env` files.
 - Keep API keys and deployment secrets only in local env or GitHub secrets.
 - Remove test students using clear-all flow before demo or release.
+
+### Phase 4 Security Controls
+
+- RBAC is enabled for enrollment, delete, reindex, import, and tracking mutation routes.
+- Signed detection payloads are enforced for `POST /api/recognition/match` and `POST /api/tracking/detection`.
+- Socket `face:detected` payloads are signature-verified when `OMNI_REQUIRE_SIGNED_SOCKET_DETECTIONS=true`.
+- Passive liveness checks are enforced for high-risk camera profiles.
+- Descriptor vectors are encrypted at rest (AES-256-GCM) before being written to SQLite.
+- Critical operations are written to an append-only audit file (`backend/data/audit-log.jsonl`).
+
+### Phase 5 Production Hardening (Local Lightweight)
+
+- Structured JSON logs for `api`, `camera`, and `recognition` services with INFO/WARN/ERROR levels.
+- Runtime metrics buffer (`getRecentMetrics`) keeps the latest 100 detection/match latency records in memory.
+- Local alert engine stores recent warnings in memory (high latency, low confidence, no detections, inactive cameras).
+- `/api/health` reports uptime, memory usage, last detection timestamp, and average latency.
+- `/api/alerts` returns recent in-memory alerts for quick debugging.
+- `/api/stats` returns total detections, successful/failed matches, and average latency.
+- Recognition pipeline has timeout + fallback behavior to avoid silent failures during long runtime.
+- Audit service keeps the latest 50 audit events in memory for instant visibility.
+
+Debug mode:
+- Set `DEBUG=true` in backend env for richer structured log details.
+- Keep `DEBUG=false` for concise production-style INFO/WARN/ERROR logging.
+
+### Client Headers
+
+- `X-Omni-Role`: `viewer` | `operator` | `admin`
+- `X-Omni-User`: caller identifier for audit records
+- `X-Omni-Api-Key`: optional API key (role resolution via `OMNI_RBAC_KEYS_JSON`)
+- `X-Omni-Signature`, `X-Omni-Signature-Ts`: required for signed detection endpoints
 
 ---
 

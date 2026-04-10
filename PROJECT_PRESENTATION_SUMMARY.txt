@@ -1,0 +1,476 @@
+OMNI-CAMPUS PROJECT PRESENTATION SUMMARY
+Version: 2026-04-10
+Project Type: Real-time campus monitoring and face-based attendance intelligence platform
+
+====================================================================
+1) EXECUTIVE SUMMARY
+====================================================================
+Omni-Campus is a full-stack, real-time platform for student presence monitoring across multiple camera sources (laptop webcams, Android IP Webcam, DroidCam, and custom IP streams). It combines edge-side face analysis in the browser with secure backend recognition, temporal stability logic, and live event propagation.
+
+The project has evolved from prototype to production-hardened implementation with:
+- live multi-camera processing,
+- secure recognition APIs,
+- encrypted descriptor storage,
+- role-based access control,
+- signed payload verification,
+- audit logging,
+- runtime alerts and metrics,
+- and presentation-ready dashboards for operations.
+
+Current delivery status:
+- Phase 1: Completed
+- Phase 2: Implemented
+- Phase 3: Implemented
+- Phase 4: Implemented
+- Phase 5: Implemented
+
+Storage strategy is SQLite-first for speed of iteration and operational simplicity, with clear triggers defined for later Postgres migration.
+
+
+====================================================================
+2) PROBLEM STATEMENT
+====================================================================
+Campuses need a low-latency, reliable, and auditable way to:
+- identify registered students in near real-time,
+- track movement by camera zone,
+- reduce duplicate/unstable detections,
+- support heterogeneous camera hardware,
+- and maintain security/privacy controls.
+
+Traditional attendance tools are either manual, not real-time, or difficult to scale securely.
+
+Omni-Campus addresses this with a modular architecture that separates:
+- visual inference,
+- identity matching,
+- temporal decision stability,
+- security verification,
+- and operations visibility.
+
+
+====================================================================
+3) HIGH-LEVEL SOLUTION OVERVIEW
+====================================================================
+Omni-Campus uses a hybrid recognition design:
+
+A) Frontend edge layer (browser)
+- Captures video/snapshot frames.
+- Runs fast face detection and descriptor extraction using face-api models.
+- Sends signed descriptor payloads to backend for robust identity decision.
+
+B) Backend decision layer
+- Validates signatures and RBAC.
+- Runs descriptor matching via ANN abstraction + strict thresholding.
+- Applies temporal stability logic (detecting/locked/switching/lost).
+- Emits socket updates to all connected clients.
+- Stores recognition events in SQLite.
+
+C) Operations and governance layer
+- Health, metrics, alerts, and stats endpoints.
+- Structured JSON logs.
+- Full audit trail for sensitive actions.
+- Encrypted descriptor storage at rest.
+
+
+====================================================================
+4) FULL STACK (END-TO-END)
+====================================================================
+
+4.1 FRONTEND STACK
+- React 18
+- Vite 5
+- React Router DOM
+- Framer Motion (UI and interaction animations)
+- Tailwind CSS 3 + PostCSS + Autoprefixer
+- React Leaflet + Leaflet (interactive map)
+- Socket.IO client (real-time events)
+- Axios and Fetch APIs (HTTP communication)
+- @vladmandic/face-api (CV inference in browser)
+- Browser Web Crypto API (signed payload generation)
+
+Frontend responsibilities:
+- Camera management and source configuration.
+- Face registration flow (multi-capture descriptor set).
+- Realtime face detection loop from active camera tiles.
+- Visual overlays and identity status states.
+- Map view, student feed, student details, and trail pages.
+- Signed API/socket payload generation.
+
+
+4.2 BACKEND STACK
+- Node.js
+- Express 4
+- Socket.IO 4
+- better-sqlite3 (SQLite database)
+- dotenv
+- cors
+- Custom services for recognition, stability, security, alerts, metrics, and audit.
+
+Backend responsibilities:
+- Recognition API orchestration and matching pipeline.
+- Student lifecycle CRUD and location updates.
+- Camera registration/disconnection handling via sockets.
+- Security policy enforcement (RBAC + signature checks).
+- SQLite persistence and recognition event recording.
+- Operational telemetry and alerting.
+
+
+4.3 DATA LAYER
+- Primary DB: SQLite (backend/data/omni-campus.db)
+- Journal mode: WAL enabled
+- Main tables:
+  - students
+  - recognition_events
+- Audit trail file:
+  - backend/data/audit-log.jsonl
+- Descriptor encryption:
+  - AES-256-GCM for descriptor blobs at rest
+
+
+4.4 REAL-TIME COMMUNICATION
+- Transport: Socket.IO
+- Server emits:
+  - student:update
+  - student:removed
+  - students:cleared
+  - detection:event
+  - cameras:list
+- Client emits:
+  - camera:register
+  - camera:disconnect
+  - student:register
+  - face:detected (signed and role-validated)
+
+
+4.5 DEVOPS / DEPLOYMENT
+- Source control and CI: GitHub + GitHub Actions
+- Frontend deployment target: Vercel
+- Backend deployment target: Railway
+- Environment-managed runtime configuration via .env and secrets
+
+
+====================================================================
+5) ARCHITECTURE AND DATA FLOW
+====================================================================
+
+5.1 FACE REGISTRATION FLOW
+1. User opens registration modal and captures multiple face samples.
+2. Frontend extracts descriptors from several capture steps.
+3. Descriptor set and quality metadata are sent to backend /api/recognition/enroll.
+4. Backend validates descriptor quality gates and stores encrypted descriptor history.
+5. Student record is upserted with deduplicated descriptor history.
+6. student:update is broadcast to connected clients.
+
+
+5.2 RECOGNITION FLOW (LIVE)
+1. CameraFeed reads frame/snapshot and runs face detection locally.
+2. Frontend extracts descriptor and sends signed /api/recognition/match request.
+3. Backend verifies signature and role context.
+4. Descriptor matching runs through ANN-backed candidate retrieval.
+5. Match decision passes through temporal stability engine.
+6. On confirmed lock, backend updates student location and emits detection:event.
+7. Dashboard, feed, and map update in real time via socket broadcasts.
+
+
+5.3 CAMERA SOURCE FLOW
+- Local webcam sources use direct media streams.
+- IP/MJPEG sources use backend proxy routes:
+  - /api/proxy/stream
+  - /api/proxy/snapshot
+  - /api/proxy/test
+- Stream proxy forwards upstream content-type to support Android IP Webcam compatibility.
+
+
+====================================================================
+6) MODELS USED (CV, MATCHING, STABILITY)
+====================================================================
+
+6.1 PRIMARY CV MODEL FAMILY (FRONTEND)
+Library: @vladmandic/face-api
+Model assets loaded from: /models
+
+Loaded models:
+- ssdMobilenetv1
+  - Higher-accuracy face detector, used in fallback/quality-sensitive paths.
+- tinyFaceDetector
+  - Faster detector for real-time low-latency loops.
+- faceLandmark68Net
+  - 68-point facial landmark estimation for stable descriptor extraction.
+- faceRecognitionNet
+  - Face embedding network producing descriptor vectors for identity matching.
+
+
+6.2 MATCHING MODEL
+- FaceMatcher with strict Euclidean distance thresholding.
+- Default strict threshold around 0.45 (configurable by environment/profile).
+- Multi-template per person matching (descriptor history) for robustness.
+
+
+6.3 ANN SEARCH MODEL (BACKEND, CUSTOM)
+- Coarse-centroid ANN abstraction (annIndex service).
+- Strategy:
+  - Build per-student centroids.
+  - Prefilter likely student candidates.
+  - Score templates and aggregate best-per-student.
+- Supports exact fallback mode and ANN metrics.
+
+
+6.4 TEMPORAL STABILITY MODEL (BACKEND, CUSTOM)
+- Multi-frame identity confirmation logic.
+- States include detecting, confirmed/locked, switching, lost.
+- Components:
+  - consecutive frame requirements,
+  - confidence smoothing,
+  - lock windows,
+  - switch thresholds,
+  - drift and motion penalties/boosts,
+  - adaptive threshold behavior for latency conditions.
+- Multi-track per-camera support with top-2 stable identities.
+
+
+6.5 PASSIVE LIVENESS MODEL (BACKEND, CUSTOM HEURISTIC)
+- Enabled especially for high-risk camera profiles.
+- Uses weighted signals:
+  - box motion over time,
+  - descriptor drift dynamics,
+  - client-side confidence/area signals,
+  - sample-count sufficiency.
+- Produces accepted/pending/rejected liveness decision and score.
+
+
+6.6 ADDITIONAL ALGORITHMIC MODELS
+- Name similarity dedupe (normalized string + Levenshtein-based similarity).
+- Descriptor history deduplication via normalized descriptor keys.
+- Camera profile threshold adaptation based on profile and camera label.
+
+
+====================================================================
+7) SECURITY AND TRUST CONTROLS
+====================================================================
+
+7.1 RBAC
+- Roles: viewer, operator, admin
+- Protected operations include:
+  - enrollment,
+  - delete/clear operations,
+  - reindex,
+  - camera profile update,
+  - audit reads,
+  - direct matching operations.
+
+
+7.2 SIGNED PAYLOAD VERIFICATION
+- Signed request validation for recognition and tracking mutation APIs.
+- Signed socket payload verification for face:detected events.
+- Timestamp age checks prevent replay attacks.
+
+
+7.3 AUDITABILITY
+- Persistent append-only JSONL audit logs.
+- In-memory recent audit buffer for quick inspection.
+- Records include actor, action, status, target, and signature validity metadata.
+
+
+7.4 DATA PROTECTION
+- Descriptor blobs encrypted at rest (AES-256-GCM).
+- Legacy descriptor records are migrated to encrypted format when needed.
+
+
+====================================================================
+8) OBSERVABILITY AND PRODUCTION HARDENING
+====================================================================
+
+Implemented observability stack:
+- Structured JSON logger for API/camera/recognition events.
+- Runtime metrics ring buffer (latency, confidence, stage timings).
+- Runtime alert engine for:
+  - high latency,
+  - low confidence,
+  - no detections,
+  - camera inactivity,
+  - pipeline failures.
+- Health and diagnostics endpoints:
+  - /health
+  - /api/health
+  - /api/alerts
+  - /api/stats
+  - /api/recognition/health
+  - /api/recognition/metrics
+
+Resilience patterns:
+- Per-camera queue and backpressure control.
+- Timeout-wrapped matching calls with safe fallback responses.
+- Port fallback startup logic to avoid hard boot failure when a port is occupied.
+- Graceful shutdown and process-level exception/rejection handlers.
+
+
+====================================================================
+9) DATABASE DESIGN SUMMARY
+====================================================================
+
+Table: students
+Key fields:
+- student_id (PK)
+- name, program, year, phone
+- status, is_on_campus
+- current_location_json
+- location_history_json
+- face_descriptor_json (encrypted)
+- face_descriptors_json (encrypted history)
+- created_at, updated_at
+
+Table: recognition_events
+Key fields:
+- id (PK)
+- student_id (FK)
+- camera_id, camera_label
+- confidence
+- matched_at
+- latency_ms
+
+Design notes:
+- SQLite WAL for better write/read concurrency.
+- Descriptor history supports improved recognition robustness.
+- Event table enables audit and movement analytics.
+
+
+====================================================================
+10) API SURFACE (PRESENTATION VIEW)
+====================================================================
+
+Core recognition endpoints:
+- POST /api/recognition/enroll
+- POST /api/recognition/match
+- POST /api/recognition/match/direct
+- POST /api/recognition/reindex
+- GET  /api/recognition/health
+- GET  /api/recognition/metrics
+- GET  /api/recognition/camera-profiles
+- PUT  /api/recognition/camera-profiles/:cameraId
+- GET  /api/recognition/audit-logs
+
+Student and tracking endpoints:
+- GET/POST/PATCH/DELETE under /api/students
+- POST endpoints under /api/tracking
+
+Camera proxy endpoints:
+- GET /api/proxy/stream
+- GET /api/proxy/snapshot
+- GET /api/proxy/test
+
+
+====================================================================
+11) PERFORMANCE TARGETS AND VALIDATION
+====================================================================
+
+Defined SLO targets:
+- Face appears to lock: <= 150 ms
+- Lock to identity match: <= 120 ms
+- Match to UI/socket emit: <= 80 ms
+- End-to-end p95: <= 350 ms stretch, <= 450 ms acceptable early
+
+Validation already executed in implementation cycle:
+- Backend syntax checks passed
+- Frontend production builds passed
+- Recognition stability test scripts executed
+- Switch and anti-switch behaviors validated in deterministic sequences
+
+
+====================================================================
+12) PHASE-WISE DELIVERY SUMMARY
+====================================================================
+
+Phase 1
+- Base dashboard, tracking, and registration infrastructure completed.
+
+Phase 2 (Realtime Recognition Core)
+- Inference worker boundary and queue/backpressure pipeline.
+- Stage latency metrics and p95 visibility.
+- Temporal stabilization mechanisms.
+
+Phase 3 (Scale and Accuracy)
+- ANN abstraction for scalable search.
+- Enrollment quality gates.
+- Multi-template identity handling.
+- Camera-specific threshold profiles.
+
+Phase 4 (Security and Anti-Spoof)
+- Passive liveness checks.
+- Descriptor encryption at rest.
+- RBAC and signed payload checks.
+- Full audit logging.
+
+Phase 5 (Production Hardening)
+- Structured logging.
+- Runtime metrics and alert engine.
+- Health/stats observability APIs.
+- Timeout/fallback handling and debug instrumentation.
+
+
+====================================================================
+13) RECENT STABILITY IMPROVEMENTS (PRACTICAL DEPLOYMENT TUNING)
+====================================================================
+
+Recent reliability enhancements include:
+- Track continuity improvements for unstable camera track hints.
+- Confidence gate alignment with threshold-based matching behavior.
+- Stability confirmation tuning for lower-quality IP/MJPEG camera feeds.
+- MJPEG-specific threshold hinting while keeping strict defaults for standard cameras.
+
+These changes improve real-world cross-camera consistency without broadly weakening identity strictness.
+
+
+====================================================================
+14) DEMO SCRIPT FOR PRESENTATION
+====================================================================
+
+Suggested live demo sequence:
+1. Show architecture slide (frontend edge inference + backend decision pipeline).
+2. Register one new student with multi-step capture.
+3. Open two cameras (webcam + IP camera).
+4. Show real-time detection and student:update propagation.
+5. Open recognition metrics panel and highlight stage latencies.
+6. Show audit logs endpoint proving signed and role-aware operations.
+7. Show map/trail updates for movement context.
+8. Trigger a controlled camera disconnect/reconnect and show resilience.
+
+
+====================================================================
+15) SCALING STRATEGY (SQLITE-FIRST TO POSTGRES)
+====================================================================
+
+Current approach:
+- SQLite is intentionally used in early production/staging for simplicity and speed.
+
+Planned migration trigger conditions:
+- >50,000 recognition events/day
+- >10 sustained concurrent camera streams with heavy writes
+- multi-instance backend write requirements
+- advanced analytics/report joins at scale
+
+Migration principle:
+- Keep interface boundaries clean so DB swap is low-risk.
+
+
+====================================================================
+16) LIMITATIONS AND NEXT ROADMAP ITEMS
+====================================================================
+
+Current known limitations:
+- No full automated test suite coverage yet (basic checks and scripts in place).
+- Model behavior depends on camera quality, angle, and lighting conditions.
+- Large frontend CV bundle size is still optimization opportunity.
+
+Recommended next steps:
+- Add deeper automated integration tests for recognition regressions.
+- Add configurable per-camera presets directly in UI for operators.
+- Expand analytics dashboards for longitudinal attendance insights.
+- Prepare DB abstraction benchmark for future Postgres migration.
+
+
+====================================================================
+17) ONE-LINE VALUE PROPOSITION
+====================================================================
+Omni-Campus is a secure, real-time, full-stack campus intelligence system that combines browser-based face understanding, backend-grade identity stabilization, and production observability to deliver reliable attendance and movement visibility across heterogeneous cameras.
+
+
+END OF DOCUMENT

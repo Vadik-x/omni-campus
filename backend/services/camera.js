@@ -3,6 +3,8 @@ const PLACEHOLDER_JPEG_BASE64 =
 const MOCK_CAMERA_ACTIVE_SVG_BASE64 = Buffer.from(
   `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#031321"/><stop offset="1" stop-color="#0e2f44"/></linearGradient></defs><rect width="640" height="360" fill="url(#g)"/><rect x="40" y="40" width="560" height="280" rx="18" fill="#091f31" stroke="#00d4ff" stroke-width="2"/><circle cx="210" cy="180" r="36" fill="#00d4ff" opacity="0.3"/><circle cx="210" cy="180" r="17" fill="#00d4ff"/><text x="260" y="175" font-size="34" font-family="Segoe UI, Arial" fill="#e8f7ff" font-weight="700">Camera Active</text><text x="260" y="206" font-size="18" font-family="Segoe UI, Arial" fill="#9cc6da">Mock preview fallback is running</text></svg>`
 ).toString("base64");
+const logger = require("./logger");
+const runtimeStats = require("./runtimeStats");
 
 let NodeWebcam = null;
 try {
@@ -27,12 +29,23 @@ let frameTimer = null;
 let liveConnectionLogged = false;
 const LIVE_FRAME_INTERVAL_MS = Number(process.env.CAMERA_FRAME_INTERVAL_MS || 180);
 const MOCK_FRAME_INTERVAL_MS = Number(process.env.MOCK_FRAME_INTERVAL_MS || 600);
+const LOCAL_CAMERA_ID = String(process.env.CAMERA_ID || "local-camera");
 
 function toMockMode() {
+  if (mode === "mock" && !connected) {
+    return;
+  }
+
   connected = false;
   mode = "mock";
   liveConnectionLogged = false;
-  console.log("Camera disconnected - using mock mode");
+  runtimeStats.recordCameraDisconnected(LOCAL_CAMERA_ID);
+  logger.warn({
+    service: "camera",
+    event: "camera.disconnected",
+    cameraId: LOCAL_CAMERA_ID,
+    message: "Camera disconnected - using mock mode",
+  });
 }
 
 function emitCameraFrame(io) {
@@ -96,7 +109,13 @@ function startCameraStream(io) {
           connected = true;
           mode = "live";
           if (!liveConnectionLogged) {
-            console.log("Camera connected");
+            runtimeStats.recordCameraConnected(LOCAL_CAMERA_ID);
+            logger.info({
+              service: "camera",
+              event: "camera.connected",
+              cameraId: LOCAL_CAMERA_ID,
+              message: "Camera connected",
+            });
             liveConnectionLogged = true;
           }
         }
@@ -130,7 +149,13 @@ function startCameraStream(io) {
     connected = true;
     mode = "live";
     if (!liveConnectionLogged) {
-      console.log("Camera connected");
+      runtimeStats.recordCameraConnected(LOCAL_CAMERA_ID);
+      logger.info({
+        service: "camera",
+        event: "camera.connected",
+        cameraId: LOCAL_CAMERA_ID,
+        message: "Camera connected",
+      });
       liveConnectionLogged = true;
     }
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { motion } from "framer-motion";
 import L from "leaflet";
 import {
   CircleMarker,
@@ -363,13 +364,26 @@ export default function CampusMap({
   );
 
   return (
-    <section className="panel map-wrap">
-      <div className="map-head">
-        <h3>Campus Map</h3>
-        <div className="map-head-actions">
+    <motion.section
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.28, ease: "easeOut" }}
+      className="glass-card rounded-2xl border border-white/10 bg-white/[0.05] p-4"
+    >
+      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="panel-title">Campus Map</h3>
+          <p className="panel-kicker">Geo surveillance layer</p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            className={`map-action-btn${isSettingCampusCenter ? " active" : ""}`}
+            className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+              isSettingCampusCenter
+                ? "border-cyan-300/60 bg-cyan-500/20 text-cyan-100"
+                : "border-white/15 bg-white/[0.04] text-slate-200 hover:border-cyan-300/35 hover:text-cyan-100"
+            }`}
             onClick={() => {
               setIsSettingCampusCenter((prev) => !prev);
               activateMap();
@@ -377,21 +391,37 @@ export default function CampusMap({
           >
             {isSettingCampusCenter ? "Cancel" : "Set Campus Location"}
           </button>
-          <div className="legend">
-            <span><i className="dot online"></i>Online</span>
-            <span><i className="dot alert"></i>Alert</span>
-            <span><i className="dot offline"></i>Offline</span>
+
+          <div className="flex items-center gap-3 text-[11px] text-slate-300">
+            <span className="inline-flex items-center gap-1.5">
+              <i className="h-2 w-2 rounded-full bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.95)]" />
+              Online
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <i className="h-2 w-2 rounded-full bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.95)]" />
+              Alert
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <i className="h-2 w-2 rounded-full bg-slate-400" />
+              Offline
+            </span>
           </div>
         </div>
       </div>
+
       {isSettingCampusCenter ? (
-        <p className="map-setting-instruction">
+        <p className="mb-2 text-xs text-cyan-200/80">
           Click anywhere on the map to set your campus location
         </p>
       ) : null}
+
       <div
         ref={mapShellRef}
-        className={`campus-map-shell${isMapActive ? " active" : ""}`}
+        className={`relative h-[360px] overflow-hidden rounded-2xl border transition-all md:h-[420px] ${
+          isMapActive
+            ? "border-cyan-300/55 shadow-neon"
+            : "border-white/10"
+        }`}
         tabIndex={0}
         role="region"
         aria-label="Campus map. Click or press Enter to interact, and press Escape to exit map interaction mode."
@@ -402,7 +432,7 @@ export default function CampusMap({
         <MapContainer
           center={safeCampusCenter}
           zoom={zoomLevel}
-          className="leaflet-map"
+          className="h-full w-full"
           zoomControl={false}
           scrollWheelZoom={false}
           dragging={false}
@@ -482,18 +512,29 @@ export default function CampusMap({
           })}
         </MapContainer>
 
+        <div className="pointer-events-none absolute inset-0 z-[390] bg-gradient-to-br from-cyan-500/5 via-transparent to-violet-500/10 backdrop-blur-[1px]" />
+
         {isMapActive ? (
-          <div className="map-active-badge" role="status" aria-live="polite">
+          <div
+            className="absolute right-3 top-3 z-[620] rounded-full bg-cyan-500/25 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-cyan-100"
+            role="status"
+            aria-live="polite"
+          >
             Map active
           </div>
         ) : null}
 
         {!isMapActive ? (
-          <div id="map-interaction-hint" className="map-interaction-hint" role="status" aria-live="polite">
+          <div
+            id="map-interaction-hint"
+            className="absolute bottom-3 left-1/2 z-[620] -translate-x-1/2 rounded-full border border-cyan-300/35 bg-[#0a1320]/80 px-3 py-1 text-xs text-cyan-100"
+            role="status"
+            aria-live="polite"
+          >
             Click map to enable scroll zoom
           </div>
         ) : null}
       </div>
-    </section>
+    </motion.section>
   );
 }
